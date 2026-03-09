@@ -1,0 +1,200 @@
+#include "system_tile.h"
+
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
+#include "freertos/semphr.h"
+
+#include "esp_flash.h"
+#include "esp_psram.h"
+#include "driver/temperature_sensor.h"
+#include "esp_private/esp_clk.h"
+
+#include "esp_pcf85063_port.h"
+#include "esp_sdcard_port.h"
+#include "esp_es8311_port.h"
+#include "esp_3inch5_lcd_port.h"
+
+SemaphoreHandle_t es8311_test_semaphore;
+temperature_sensor_handle_t temp_sensor = NULL;
+
+// extern void brightness_set_level(uint8_t level);
+// extern void es8311_test_init(SemaphoreHandle_t xBinarySemaphore);
+
+lv_obj_t *label_brightness;
+lv_obj_t *label_time;
+lv_obj_t *label_date;
+lv_obj_t *label_flash;
+lv_obj_t *label_psram;
+lv_obj_t *label_chip_temp;
+lv_obj_t *label_chip_freq;
+lv_obj_t *label_sd;
+
+
+static void slider_event_cb(lv_event_t *e)
+{
+    lv_event_code_t code = lv_event_get_code(e);
+    if (code == LV_EVENT_VALUE_CHANGED)
+    {
+        lv_obj_t *slider = lv_event_get_target(e);
+        int value = lv_slider_get_value(slider);
+        // printf("Slider value: %d\n", value);
+
+        lv_label_set_text_fmt(label_brightness, "%d %%", value);
+        // brightness_set_level(value);
+        esp_3inch5_brightness_port_set(value);
+        // bsp_display_handle_t display = bsp_display_get_handle();
+        // display->set_brightness(display, value);
+        lv_event_stop_bubbling(e);
+    }
+}
+
+static void system_time_cb(lv_timer_t *timer)
+{
+    char str[20];
+    float tsens_out;
+    RTC_DateTime datetime = rtc.getDateTime();
+
+    lv_label_set_text_fmt(label_date, "%04d-%02d-%02d", datetime.year, datetime.month, datetime.day);
+    lv_label_set_text_fmt(label_time, "%02d:%02d:%02d", datetime.hour, datetime.minute, datetime.second);
+
+    temperature_sensor_get_celsius(temp_sensor, &tsens_out);
+    sprintf(str, "%.1f'C", tsens_out);
+    if(label_chip_temp != NULL)
+    lv_label_set_text(label_chip_temp, str);
+}
+
+static void lvgl_es8311_test_task(void *arg)
+{
+    while (1)
+    {
+        if (xSemaphoreTake(es8311_test_semaphore, portMAX_DELAY) == pdTRUE)
+        {
+            printf("esp_es8311_test\r\n");
+            esp_es8311_test();
+        }        
+    }
+}
+
+void system_init(void)
+{
+    uint32_t flash_size;
+    uint32_t psram_size;
+    uint64_t sdcard_size;
+    uint32_t cpu_freq;
+
+    temperature_sensor_config_t temp_sensor_config = TEMPERATURE_SENSOR_CONFIG_DEFAULT(10, 80);
+    temperature_sensor_install(&temp_sensor_config, &temp_sensor);
+    temperature_sensor_enable(temp_sensor);
+
+    esp_flash_get_size(NULL, &flash_size);
+    if(label_flash != NULL)
+    lv_label_set_text_fmt(label_flash, "%d MB", (int)(flash_size / 1024 / 1024));
+
+    psram_size = (uint32_t)esp_psram_get_size();
+    if(label_psram != NULL)
+    lv_label_set_text_fmt(label_psram, "%d MB", (int)(psram_size / 1024 / 1024));
+
+    cpu_freq = esp_clk_cpu_freq();
+    if(label_chip_freq != NULL)
+    lv_label_set_text_fmt(label_chip_freq, "%d MHz", (int)(cpu_freq / 1000 / 1000));
+
+    sdcard_size = esp_sdcard_port_get_size();
+    if(label_sd != NULL){
+        if(sdcard_size == 0){
+            lv_label_set_text(label_sd, "No SDCard");
+            lv_obj_set_style_text_color(label_sd, lv_color_hex(0xFF0000), LV_PART_MAIN);
+        } else {
+            lv_label_set_text_fmt(label_sd, "%d MB", (int)(sdcard_size / 1024 / 1024));
+        }
+    }
+
+
+    es8311_test_semaphore = xSemaphoreCreateBinary();
+    assert(es8311_test_semaphore != NULL);
+    xTaskCreatePinnedToCore(lvgl_es8311_test_task, "lvgl_es8311_test_task", 4096, NULL, 1, NULL, 1);
+
+    // es8311_test_init(xBinarySemaphore);
+}
+
+static void btn_es8311_test_event_handler(lv_event_t *e)
+{
+    lv_event_code_t code = lv_event_get_code(e);
+    lv_obj_t *obj = lv_event_get_target(e);
+    if (code == LV_EVENT_CLICKED && es8311_test_semaphore != NULL)
+    {
+        xSemaphoreGive(es8311_test_semaphore);
+    }
+}
+
+void system_tile_init(lv_obj_t *parent)
+{
+    /*Create a list*/
+    lv_obj_t *list = lv_list_create(parent);
+    lv_obj_t *lable = lv_label_create(parent);
+    lv_obj_set_style_text_font(lable, &lv_font_montserrat_16, LV_PART_MAIN);
+    lv_label_set_text(lable, "System");
+    lv_obj_align(lable, LV_ALIGN_TOP_MID, 0, 3);
+
+    lv_obj_set_size(list, lv_pct(95), LV_SIZE_CONTENT);
+    lv_obj_set_style_max_height(list, lv_pct(80), LV_PART_MAIN);
+    lv_obj_align(list, LV_ALIGN_TOP_MID, 0, 30);
+
+    lv_obj_t *btn = lv_btn_create(parent);
+    lable = lv_label_create(btn);
+    lv_obj_set_size(btn, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
+    lv_label_set_text(lable, "ES8311 Test");
+    lv_obj_center(lable);
+    lv_obj_align(btn, LV_ALIGN_BOTTOM_LEFT, 0, 0);
+    lv_obj_add_event_cb(btn, btn_es8311_test_event_handler, LV_EVENT_CLICKED, NULL);
+
+    lv_obj_t *slider = lv_slider_create(parent);
+    lv_slider_set_range(slider, 1, 100);
+    lv_slider_set_value(slider, 80, LV_ANIM_OFF);
+
+    lv_obj_set_size(slider, lv_pct(50), lv_pct(5));
+    lv_obj_align(slider, LV_ALIGN_BOTTOM_MID, 55, -18);
+    lv_obj_add_event_cb(slider, slider_event_cb, LV_EVENT_VALUE_CHANGED, NULL);
+
+    lv_obj_t *list_item;
+    // list_item = lv_list_add_btn(list, NULL, "Chip");
+    // lv_obj_t *label_chip = lv_label_create(list_item);
+    // lv_label_set_text(label_chip, "ESP32-S3");
+
+    // list_item = lv_list_add_btn(list, NULL, "ChipTemp");
+    // label_chip_temp = lv_label_create(list_item);
+    // lv_label_set_text(label_chip_temp, "--- C");
+
+    // list_item = lv_list_add_btn(list, NULL, "ChipFreq");
+    // label_chip_freq = lv_label_create(list_item);
+    // lv_label_set_text(label_chip_freq, "--- MHz");
+
+    list_item = lv_list_add_btn(list, NULL, "Brightness");
+    label_brightness = lv_label_create(list_item);
+    lv_label_set_text(label_brightness, "80 %");
+
+    // list_item = lv_list_add_btn(list, NULL, "SRAM");
+    // lv_obj_t *label_ram = lv_label_create(list_item);
+    // lv_label_set_text(label_ram, "512 KB");
+
+    // list_item = lv_list_add_btn(list, NULL, "PSRAM");
+    // label_psram = lv_label_create(list_item);
+    // lv_label_set_text(label_psram, "--- MB");
+
+    // list_item = lv_list_add_btn(list, NULL, "Flash");
+    // label_flash = lv_label_create(list_item);
+    // lv_label_set_text(label_flash, "--- MB");
+
+    list_item = lv_list_add_btn(list, NULL, "SDCard");
+    label_sd = lv_label_create(list_item);
+    lv_label_set_text(label_sd, "--- MB");
+
+    list_item = lv_list_add_btn(list, NULL, "Date");
+    label_date = lv_label_create(list_item);
+    lv_label_set_text(label_date, "2025-01-01");
+
+    list_item = lv_list_add_btn(list, NULL, "Time");
+    label_time = lv_label_create(list_item);
+    lv_label_set_text(label_time, "12:00:00");
+    system_init();
+    lv_timer_create(system_time_cb, 1000, NULL);
+}
