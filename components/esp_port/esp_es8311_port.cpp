@@ -138,3 +138,13 @@ void esp_es8311_test(void)
     
     heap_caps_free(data);
 }
+
+esp_codec_dev_handle_t esp_es8311_get_output_dev(void)
+{
+    return output_dev;
+}
+
+esp_codec_dev_handle_t esp_es8311_get_input_dev(void)
+{
+    return input_dev;
+}

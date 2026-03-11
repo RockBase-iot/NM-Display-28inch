@@ -8,11 +8,14 @@
 #include "esp_psram.h"
 #include "driver/temperature_sensor.h"
 #include "esp_private/esp_clk.h"
+#include "esp_heap_caps.h"
 
 #include "esp_pcf85063_port.h"
 #include "esp_sdcard_port.h"
 #include "esp_es8311_port.h"
 #include "esp_3inch5_lcd_port.h"
+
+#include "esp_codec_dev.h"
 
 SemaphoreHandle_t es8311_test_semaphore;
 temperature_sensor_handle_t temp_sensor = NULL;
@@ -28,6 +31,8 @@ lv_obj_t *label_psram;
 lv_obj_t *label_chip_temp;
 lv_obj_t *label_chip_freq;
 lv_obj_t *label_sd;
+lv_obj_t *label_es8311_test;  // 用于更新按钮文本
+lv_obj_t *btn_es8311_test;    // 用于更新按钮颜色
 
 
 static void slider_event_cb(lv_event_t *e)
@@ -63,14 +68,110 @@ static void system_time_cb(lv_timer_t *timer)
     lv_label_set_text(label_chip_temp, str);
 }
 
+// 用于在LVGL线程中更新按钮文本的回调函数
+static void update_button_text_cb(void *arg)
+{
+    const char *text = (const char *)arg;
+    if (label_es8311_test != NULL)
+    {
+        lv_label_set_text(label_es8311_test, text);
+    }
+}
+
+// 用于在LVGL线程中更新按钮颜色的回调函数
+static void update_button_color_cb(void *arg)
+{
+    uint32_t color = (uint32_t)(uintptr_t)arg;
+    if (btn_es8311_test != NULL)
+    {
+        lv_obj_set_style_bg_color(btn_es8311_test, lv_color_hex(color), LV_PART_MAIN);
+    }
+}
+
 static void lvgl_es8311_test_task(void *arg)
 {
+    const int RECORD_SECONDS = 5;  // 录音持续时间（秒）
+    const int SAMPLE_RATE = 48000;
+    const int CHANNELS = 1;
+    const int BITS_PER_SAMPLE = 16;
+    const int CHUNK_DURATION_MS = 200;  // 每块录音时长（毫秒），用于更新倒计时
+    
     while (1)
     {
         if (xSemaphoreTake(es8311_test_semaphore, portMAX_DELAY) == pdTRUE)
         {
-            printf("esp_es8311_test\r\n");
-            esp_es8311_test();
+            printf("Audio test started\r\n");
+            
+            int err = 0;
+            // 5秒录音
+            const int total_size = RECORD_SECONDS * SAMPLE_RATE * CHANNELS * (BITS_PER_SAMPLE >> 3);
+            const int chunk_size = (CHUNK_DURATION_MS * SAMPLE_RATE * CHANNELS * (BITS_PER_SAMPLE >> 3)) / 1000;
+            const int num_chunks = (total_size + chunk_size - 1) / chunk_size;
+            
+            uint8_t *data = (uint8_t *)heap_caps_malloc(total_size, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+            if (data == NULL)
+            {
+                printf("Memory allocation failed\r\n");
+                lv_async_call(update_button_text_cb, (void *)"Audio Test");
+                lv_async_call(update_button_color_cb, (void *)(uintptr_t)0x2196F3); // 恢复默认蓝色
+                continue;
+            }
+            
+            // 获取codec设备句柄
+            esp_codec_dev_handle_t input_dev = esp_es8311_get_input_dev();
+            esp_codec_dev_handle_t output_dev = esp_es8311_get_output_dev();
+            
+            // 阶段1: 录音（带倒计时）
+            printf("Recording...\r\n");
+            lv_async_call(update_button_color_cb, (void *)(uintptr_t)0xFF5722); // 录音阶段：红色
+            
+            esp_codec_dev_set_in_gain(input_dev, 100.0); // 设置最大增益
+            
+            int bytes_read = 0;
+            for (int i = 0; i < num_chunks; i++)
+            {
+                int current_chunk_size = (i == num_chunks - 1) ? (total_size - bytes_read) : chunk_size;
+                
+                // 更新倒计时
+                int remaining_seconds = RECORD_SECONDS - (i * CHUNK_DURATION_MS / 1000);
+                char countdown_text[32];
+                snprintf(countdown_text, sizeof(countdown_text), "Recording %ds", remaining_seconds);
+                lv_async_call(update_button_text_cb, (void *)countdown_text);
+                
+                err = esp_codec_dev_read(input_dev, data + bytes_read, current_chunk_size);
+                if (err != ESP_CODEC_DEV_OK)
+                {
+                    printf("Recording error %d at chunk %d\n", err, i);
+                    break;
+                }
+                bytes_read += current_chunk_size;
+            }
+            
+            esp_codec_dev_set_in_gain(input_dev, 0.0);
+            printf("Recorded %d bytes\n", bytes_read);
+            
+            // 阶段2: 回放
+            lv_async_call(update_button_text_cb, (void *)"Replaying");
+            lv_async_call(update_button_color_cb, (void *)(uintptr_t)0x4CAF50); // 回放阶段：绿色
+            vTaskDelay(pdMS_TO_TICKS(100)); // 等待UI更新
+            
+            printf("Replaying...\r\n");
+            esp_codec_dev_set_out_vol(output_dev, 100.0); // 设置最大音量
+            err = esp_codec_dev_write(output_dev, data, bytes_read);
+            esp_codec_dev_set_out_vol(output_dev, 0.0);
+            
+            if (err == ESP_CODEC_DEV_OK)
+                printf("Replayed %d bytes\n", bytes_read);
+            else
+                printf("Replay error %d\n", err);
+            
+            heap_caps_free(data);
+            
+            // 阶段3: 恢复初始状态
+            lv_async_call(update_button_text_cb, (void *)"Audio Test");
+            lv_async_call(update_button_color_cb, (void *)(uintptr_t)0x2196F3); // 恢复默认蓝色
+            
+            printf("Audio test completed\r\n");
         }        
     }
 }
@@ -139,20 +240,20 @@ void system_tile_init(lv_obj_t *parent)
     lv_obj_set_style_max_height(list, lv_pct(80), LV_PART_MAIN);
     lv_obj_align(list, LV_ALIGN_TOP_MID, 0, 30);
 
-    lv_obj_t *btn = lv_btn_create(parent);
-    lable = lv_label_create(btn);
-    lv_obj_set_size(btn, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
-    lv_label_set_text(lable, "ES8311 Test");
-    lv_obj_center(lable);
-    lv_obj_align(btn, LV_ALIGN_BOTTOM_LEFT, 0, 0);
-    lv_obj_add_event_cb(btn, btn_es8311_test_event_handler, LV_EVENT_CLICKED, NULL);
+    btn_es8311_test = lv_btn_create(parent);
+    label_es8311_test = lv_label_create(btn_es8311_test);
+    lv_obj_set_size(btn_es8311_test, 110, 30); // 设置固定尺寸以容纳倒计时文本
+    lv_label_set_text(label_es8311_test, "Audio Test");
+    lv_obj_center(label_es8311_test);
+    lv_obj_align(btn_es8311_test, LV_ALIGN_BOTTOM_LEFT, 0, -20);
+    lv_obj_set_style_bg_color(btn_es8311_test, lv_color_hex(0x2196F3), LV_PART_MAIN); // 默认蓝色
+    lv_obj_add_event_cb(btn_es8311_test, btn_es8311_test_event_handler, LV_EVENT_CLICKED, NULL);
 
     lv_obj_t *slider = lv_slider_create(parent);
     lv_slider_set_range(slider, 1, 100);
     lv_slider_set_value(slider, 80, LV_ANIM_OFF);
-
     lv_obj_set_size(slider, lv_pct(50), lv_pct(5));
-    lv_obj_align(slider, LV_ALIGN_BOTTOM_MID, 55, -18);
+    lv_obj_align(slider, LV_ALIGN_BOTTOM_MID, 55, -30);
     lv_obj_add_event_cb(slider, slider_event_cb, LV_EVENT_VALUE_CHANGED, NULL);
 
     lv_obj_t *list_item;
