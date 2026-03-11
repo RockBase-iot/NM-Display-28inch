@@ -31,8 +31,8 @@ lv_obj_t *label_psram;
 lv_obj_t *label_chip_temp;
 lv_obj_t *label_chip_freq;
 lv_obj_t *label_sd;
-lv_obj_t *label_es8311_test;  // 用于更新按钮文本
-lv_obj_t *btn_es8311_test;    // 用于更新按钮颜色
+lv_obj_t *label_es8311_test;  // For updating button text
+lv_obj_t *btn_es8311_test;    // For updating button color
 
 
 static void slider_event_cb(lv_event_t *e)
@@ -46,7 +46,7 @@ static void slider_event_cb(lv_event_t *e)
 
         lv_label_set_text_fmt(label_brightness, "%d %%", value);
         // brightness_set_level(value);
-        esp_3inch5_brightness_port_set(value);
+        esp_28_brightness_port_set(value);
         // bsp_display_handle_t display = bsp_display_get_handle();
         // display->set_brightness(display, value);
         lv_event_stop_bubbling(e);
@@ -68,7 +68,7 @@ static void system_time_cb(lv_timer_t *timer)
     lv_label_set_text(label_chip_temp, str);
 }
 
-// 用于在LVGL线程中更新按钮文本的回调函数
+// Callback function for updating button text in LVGL thread
 static void update_button_text_cb(void *arg)
 {
     const char *text = (const char *)arg;
@@ -78,7 +78,7 @@ static void update_button_text_cb(void *arg)
     }
 }
 
-// 用于在LVGL线程中更新按钮颜色的回调函数
+// Callback function for updating button color in LVGL thread
 static void update_button_color_cb(void *arg)
 {
     uint32_t color = (uint32_t)(uintptr_t)arg;
@@ -90,11 +90,11 @@ static void update_button_color_cb(void *arg)
 
 static void lvgl_es8311_test_task(void *arg)
 {
-    const int RECORD_SECONDS = 5;  // 录音持续时间（秒）
+    const int RECORD_SECONDS = 5;  // Recording duration in seconds
     const int SAMPLE_RATE = 48000;
     const int CHANNELS = 1;
     const int BITS_PER_SAMPLE = 16;
-    const int CHUNK_DURATION_MS = 200;  // 每块录音时长（毫秒），用于更新倒计时
+    const int CHUNK_DURATION_MS = 200;  // Chunk duration in milliseconds for updating countdown
     
     while (1)
     {
@@ -103,7 +103,7 @@ static void lvgl_es8311_test_task(void *arg)
             printf("Audio test started\r\n");
             
             int err = 0;
-            // 5秒录音
+            // 5 seconds recording
             const int total_size = RECORD_SECONDS * SAMPLE_RATE * CHANNELS * (BITS_PER_SAMPLE >> 3);
             const int chunk_size = (CHUNK_DURATION_MS * SAMPLE_RATE * CHANNELS * (BITS_PER_SAMPLE >> 3)) / 1000;
             const int num_chunks = (total_size + chunk_size - 1) / chunk_size;
@@ -113,26 +113,26 @@ static void lvgl_es8311_test_task(void *arg)
             {
                 printf("Memory allocation failed\r\n");
                 lv_async_call(update_button_text_cb, (void *)"Audio Test");
-                lv_async_call(update_button_color_cb, (void *)(uintptr_t)0x2196F3); // 恢复默认蓝色
+                lv_async_call(update_button_color_cb, (void *)(uintptr_t)0x2196F3); // Restore default blue color
                 continue;
             }
             
-            // 获取codec设备句柄
+            // Get codec device handles
             esp_codec_dev_handle_t input_dev = esp_es8311_get_input_dev();
             esp_codec_dev_handle_t output_dev = esp_es8311_get_output_dev();
             
-            // 阶段1: 录音（带倒计时）
+            // Phase 1: Recording (with countdown)
             printf("Recording...\r\n");
-            lv_async_call(update_button_color_cb, (void *)(uintptr_t)0xFF5722); // 录音阶段：红色
+            lv_async_call(update_button_color_cb, (void *)(uintptr_t)0xFF5722); // Recording phase: red color
             
-            esp_codec_dev_set_in_gain(input_dev, 100.0); // 设置最大增益
+            esp_codec_dev_set_in_gain(input_dev, 100.0); // Set maximum gain
             
             int bytes_read = 0;
             for (int i = 0; i < num_chunks; i++)
             {
                 int current_chunk_size = (i == num_chunks - 1) ? (total_size - bytes_read) : chunk_size;
                 
-                // 更新倒计时
+                // Update countdown
                 int remaining_seconds = RECORD_SECONDS - (i * CHUNK_DURATION_MS / 1000);
                 char countdown_text[32];
                 snprintf(countdown_text, sizeof(countdown_text), "Recording %ds", remaining_seconds);
@@ -150,13 +150,13 @@ static void lvgl_es8311_test_task(void *arg)
             esp_codec_dev_set_in_gain(input_dev, 0.0);
             printf("Recorded %d bytes\n", bytes_read);
             
-            // 阶段2: 回放
+            // Phase 2: Playback
             lv_async_call(update_button_text_cb, (void *)"Replaying");
-            lv_async_call(update_button_color_cb, (void *)(uintptr_t)0x4CAF50); // 回放阶段：绿色
-            vTaskDelay(pdMS_TO_TICKS(100)); // 等待UI更新
+            lv_async_call(update_button_color_cb, (void *)(uintptr_t)0x4CAF50); // Playback phase: green color
+            vTaskDelay(pdMS_TO_TICKS(100)); // Wait for UI update
             
             printf("Replaying...\r\n");
-            esp_codec_dev_set_out_vol(output_dev, 100.0); // 设置最大音量
+            esp_codec_dev_set_out_vol(output_dev, 100.0); // Set maximum volume
             err = esp_codec_dev_write(output_dev, data, bytes_read);
             esp_codec_dev_set_out_vol(output_dev, 0.0);
             
@@ -167,9 +167,9 @@ static void lvgl_es8311_test_task(void *arg)
             
             heap_caps_free(data);
             
-            // 阶段3: 恢复初始状态
+            // Phase 3: Restore initial state
             lv_async_call(update_button_text_cb, (void *)"Audio Test");
-            lv_async_call(update_button_color_cb, (void *)(uintptr_t)0x2196F3); // 恢复默认蓝色
+            lv_async_call(update_button_color_cb, (void *)(uintptr_t)0x2196F3); // Restore default blue color
             
             printf("Audio test completed\r\n");
         }        
@@ -242,18 +242,20 @@ void system_tile_init(lv_obj_t *parent)
 
     btn_es8311_test = lv_btn_create(parent);
     label_es8311_test = lv_label_create(btn_es8311_test);
-    lv_obj_set_size(btn_es8311_test, 110, 30); // 设置固定尺寸以容纳倒计时文本
+    lv_obj_set_size(btn_es8311_test, 110, 30); // Set fixed size to accommodate countdown text
     lv_label_set_text(label_es8311_test, "Audio Test");
     lv_obj_center(label_es8311_test);
-    lv_obj_align(btn_es8311_test, LV_ALIGN_BOTTOM_LEFT, 0, -20);
-    lv_obj_set_style_bg_color(btn_es8311_test, lv_color_hex(0x2196F3), LV_PART_MAIN); // 默认蓝色
+    lv_obj_align(btn_es8311_test, LV_ALIGN_BOTTOM_LEFT, 2, -20);
+    lv_obj_set_style_bg_color(btn_es8311_test, lv_color_hex(0x2196F3), LV_PART_MAIN); // Default blue color
     lv_obj_add_event_cb(btn_es8311_test, btn_es8311_test_event_handler, LV_EVENT_CLICKED, NULL);
 
     lv_obj_t *slider = lv_slider_create(parent);
     lv_slider_set_range(slider, 1, 100);
     lv_slider_set_value(slider, 80, LV_ANIM_OFF);
-    lv_obj_set_size(slider, lv_pct(50), lv_pct(5));
-    lv_obj_align(slider, LV_ALIGN_BOTTOM_MID, 55, -30);
+    lv_obj_set_size(slider, lv_pct(50), 20); // Height set to 20 pixels for easier clicking
+    lv_obj_align(slider, LV_ALIGN_BOTTOM_MID, 55, -25);
+    // Increase slider knob size for easier touch
+    lv_obj_set_style_pad_all(slider, 5, LV_PART_KNOB);
     lv_obj_add_event_cb(slider, slider_event_cb, LV_EVENT_VALUE_CHANGED, NULL);
 
     lv_obj_t *list_item;

@@ -186,7 +186,7 @@ void esp_28_touch_port_init(esp_lcd_touch_handle_t *touch_handle, i2c_master_bus
     ESP_ERROR_CHECK(esp_lcd_touch_new_i2c_ft6336(touch_io_handle, &tp_cfg, touch_handle));
 }
 
-void esp_3inch5_brightness_port_init(void)
+void esp_28_brightness_port_init(void)
 {
     // Prepare and then apply the LEDC PWM timer configuration
     ledc_timer_config_t ledc_timer = {};
@@ -209,7 +209,7 @@ void esp_3inch5_brightness_port_init(void)
     ESP_ERROR_CHECK(ledc_channel_config(&ledc_channel));
 }
 
-void esp_3inch5_brightness_port_set(uint8_t brightness)
+void esp_28_brightness_port_set(uint8_t brightness)
 {
     if (brightness > 100)
     {

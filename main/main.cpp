@@ -103,8 +103,8 @@ extern "C" void app_main(void)
     esp_camera_port_init(I2C_PORT_NUM);
     esp_wifi_port_init("NMTech-2.4G", "NMMiner2048");
 
-    esp_3inch5_brightness_port_init();
-    esp_3inch5_brightness_port_set(80);
+    esp_28_brightness_port_init();
+    esp_28_brightness_port_set(80);
     lv_port_init();
 
     button_init();

@@ -1,5 +1,5 @@
 
-# 递归查找所有子目录下的.c文件
+# Recursively find all .cpp files in subdirectories
 file(GLOB_RECURSE SRC_FILES "*.cpp")
 
 

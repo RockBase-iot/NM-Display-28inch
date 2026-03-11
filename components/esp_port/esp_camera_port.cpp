@@ -53,7 +53,7 @@ void esp_camera_port_init(i2c_port_num_t i2c_port)
     config.grab_mode = CAMERA_GRAB_WHEN_EMPTY;
     config.fb_location = CAMERA_FB_IN_PSRAM;
     config.jpeg_quality = 12;
-    config.fb_count = 1;
+    config.fb_count = 2;  // Increase to 2 buffers to reduce overflow issues
 
     esp_err_t err = esp_camera_init(&config);
     

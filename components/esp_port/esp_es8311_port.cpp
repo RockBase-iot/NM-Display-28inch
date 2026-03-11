@@ -20,11 +20,11 @@
 #define USE_IDF_I2C_MASTER
 
 
-#define I2S_MCK_PIN 12  // MCLK 引脚
-#define I2S_BCK_PIN 13  // BCLK 引脚
-#define I2S_LRCK_PIN 15 // LRCLK 引脚
-#define I2S_DOUT_PIN 16 // 数据输出（录制）
-#define I2S_DIN_PIN 14  // 数据输入（播放）
+#define I2S_MCK_PIN 12  // MCLK pin
+#define I2S_BCK_PIN 13  // BCLK pin
+#define I2S_LRCK_PIN 15 // LRCLK pin
+#define I2S_DOUT_PIN 16 // Data output (recording)
+#define I2S_DIN_PIN 14  // Data input (playback)
 
 i2s_chan_handle_t tx_handle;
 i2s_chan_handle_t rx_handle;

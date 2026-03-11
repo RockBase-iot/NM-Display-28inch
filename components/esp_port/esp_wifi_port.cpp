@@ -61,7 +61,7 @@ static void event_handler(void *arg, esp_event_base_t event_base,
     else if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_SCAN_DONE)
     {
         ESP_LOGI(TAG, "WiFi scan done!!!!!");
-        // 释放信号量
+        // Release semaphore
         xSemaphoreGive(wifi_scan_Semaphore);
     }
 
@@ -69,7 +69,7 @@ static void event_handler(void *arg, esp_event_base_t event_base,
     {
         ip_event_got_ip_t *event = (ip_event_got_ip_t *)event_data;
         ESP_LOGI(TAG, "Got IP:" IPSTR, IP2STR(&event->ip_info.ip));
-        // 释放信号量
+        // Release semaphore
         xSemaphoreGive(wifi_connect_Semaphore);
         wifi_ap_record_t ap_info;
         esp_err_t err = esp_wifi_sta_get_ap_info(&ap_info);
