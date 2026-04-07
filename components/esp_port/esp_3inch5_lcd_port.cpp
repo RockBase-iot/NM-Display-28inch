@@ -68,13 +68,13 @@ void esp_28_display_port_init(esp_lcd_panel_io_handle_t *io_handle, esp_lcd_pane
     buscfg.max_transfer_sz = max_transfer_sz;
 
     ESP_ERROR_CHECK(spi_bus_initialize(EXAMPLE_SPI_HOST, &buscfg, SPI_DMA_CH_AUTO));
-    soft_reset_once();
+    // soft_reset_once();
     ESP_LOGI(TAG, "Install panel IO");
     esp_lcd_panel_io_spi_config_t io_config = {};
     io_config.cs_gpio_num = EXAMPLE_PIN_LCD_CS;
     io_config.dc_gpio_num = EXAMPLE_PIN_LCD_DC;
     io_config.spi_mode = 3; // Different with st7796, st7789 needs SPI mode 3
-    io_config.pclk_hz = 80*1000*1000;
+    io_config.pclk_hz = 20*1000*1000;
     io_config.trans_queue_depth = 10;
     io_config.on_color_trans_done = NULL;
     io_config.user_ctx = NULL;
