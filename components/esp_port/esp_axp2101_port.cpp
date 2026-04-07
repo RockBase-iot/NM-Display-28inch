@@ -7,6 +7,11 @@
 #include "driver/i2c_master.h"
 
 #define XPOWERS_CHIP_AXP2101
+// This board's AXP2101 reports chip ID 0x47 instead of the default 0x4A.
+// Pre-include the constants header, then override the chip ID before XPowersLib.h pulls it in.
+#include "REG/AXP2101Constants.h"
+#undef XPOWERS_AXP2101_CHIP_ID
+#define XPOWERS_AXP2101_CHIP_ID (0x47)
 #include "XPowersLib.h"
 static const char *TAG = "AXP2101";
 
@@ -61,7 +66,18 @@ static int pmu_register_write_byte(uint8_t devAddr, uint8_t regAddr, uint8_t *da
 
 esp_err_t esp_axp2101_port_init(i2c_master_bus_handle_t bus_handle)
 {
-    i2c_init(bus_handle);
+    esp_err_t err = i2c_init(bus_handle);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "I2C device add failed: %s", esp_err_to_name(err));
+        return err;
+    }
+    ESP_LOGI(TAG, "I2C device added successfully, addr=0x34");
+
+    // Test raw I2C read before calling begin()
+    uint8_t chip_id = 0;
+    int ret = pmu_register_read(AXP2101_SLAVE_ADDRESS, 0x03, &chip_id, 1);  // 0x03 = IC_TYPE register
+    ESP_LOGI(TAG, "Raw I2C read test: ret=%d, chip_id=0x%02x", ret, chip_id);
+
     //* Implemented using read and write callback methods, applicable to other platforms
     ESP_LOGI(TAG, "Implemented using read and write callback methods");
     if (power.begin(AXP2101_SLAVE_ADDRESS, pmu_register_read, pmu_register_write_byte))
