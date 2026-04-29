@@ -91,46 +91,16 @@ extern "C" void app_main(void)
     }
     ESP_ERROR_CHECK(ret);
     i2c_bus_init();
-    ESP_LOGI(TAG, "I2C bus initialized");
-
-    ESP_LOGI(TAG, "Initializing IO expander (TCA9554)...");
     io_expander_init();
-    ESP_LOGI(TAG, "IO expander (TCA9554) initialized OK");
-
     esp_28_display_port_init(&io_handle, &panel_handle, LCD_BUFFER_SIZE);
-
-    ESP_LOGI(TAG, "Initializing touch (FT6336)...");
     esp_28_touch_port_init(&touch_handle, i2c_bus_handle, EXAMPLE_LCD_H_RES, EXAMPLE_LCD_V_RES, EXAMPLE_DISPLAY_ROTATION);
-    ESP_LOGI(TAG, "Touch (FT6336) initialized OK");
-
-    ESP_LOGI(TAG, "Initializing PMU (AXP2101)...");
-    ret = esp_axp2101_port_init(i2c_bus_handle);
-    if (ret == ESP_OK) {
-        ESP_LOGI(TAG, "PMU (AXP2101) initialized OK");
-    } else {
-        ESP_LOGE(TAG, "PMU (AXP2101) init failed: %s", esp_err_to_name(ret));
-    }
+    esp_axp2101_port_init(i2c_bus_handle);
     vTaskDelay(pdMS_TO_TICKS(100));
-
-    ESP_LOGI(TAG, "Initializing audio codec (ES8311)...");
     esp_es8311_port_init(i2c_bus_handle);
-    ESP_LOGI(TAG, "Audio codec (ES8311) initialized OK");
-
-    ESP_LOGI(TAG, "Initializing IMU (QMI8658)...");
     esp_qmi8658_port_init(i2c_bus_handle);
-    ESP_LOGI(TAG, "IMU (QMI8658) initialized OK");
-
-    ESP_LOGI(TAG, "Initializing RTC (PCF85063)...");
     esp_pcf85063_port_init(i2c_bus_handle);
-    ESP_LOGI(TAG, "RTC (PCF85063) initialized OK");
-
-    ESP_LOGI(TAG, "Initializing SD card...");
     esp_sdcard_port_init();
-    ESP_LOGI(TAG, "SD card initialized OK");
-
-    ESP_LOGI(TAG, "Initializing camera...");
     esp_camera_port_init(I2C_PORT_NUM);
-    ESP_LOGI(TAG, "Camera initialized OK");
     esp_wifi_port_init("NMTech-2.4G", "NMMiner2048");
 
     esp_28_brightness_port_init();
