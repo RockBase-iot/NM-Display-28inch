@@ -1,3 +1,5 @@
+**中文 | [English](README.md)**
+
 # NM-Display-2.8inch 全功能验证固件
 
 本项目是针对 **NM-Display 2.8 寸开发板**（ESP32-S3）的全板硬件功能覆盖测试固件，用于出厂验证和功能联调。

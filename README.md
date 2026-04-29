@@ -1,3 +1,5 @@
+**[中文](readme_cn.md) | English**
+
 # NM-Display-2.8inch Full Hardware Validation Firmware
 
 This project is a full-board hardware validation firmware for the **NM-Display 2.8-inch development board** (ESP32-S3), designed for factory testing and hardware bring-up verification.
