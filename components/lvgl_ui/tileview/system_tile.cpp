@@ -16,6 +16,7 @@
 #include "esp_3inch5_lcd_port.h"
 
 #include "esp_codec_dev.h"
+#include "esp_lvgl_port.h"
 
 SemaphoreHandle_t es8311_test_semaphore;
 temperature_sensor_handle_t temp_sensor = NULL;
@@ -68,23 +69,32 @@ static void system_time_cb(lv_timer_t *timer)
     lv_label_set_text(label_chip_temp, str);
 }
 
-// Callback function for updating button text in LVGL thread
-static void update_button_text_cb(void *arg)
+// Helpers that synchronously update the button under the LVGL lock.
+// NOTE: do NOT use lv_async_call() with a stack-allocated string – the
+// async queue may be drained long after the caller's stack frame is gone,
+// which previously caused a wild-pointer access ("Cache disabled but cached
+// memory region accessed") panic during the recording countdown.
+static void ui_set_button_text(const char *text)
 {
-    const char *text = (const char *)arg;
-    if (label_es8311_test != NULL)
+    if (lvgl_port_lock(100))
     {
-        lv_label_set_text(label_es8311_test, text);
+        if (label_es8311_test != NULL)
+        {
+            lv_label_set_text(label_es8311_test, text);
+        }
+        lvgl_port_unlock();
     }
 }
 
-// Callback function for updating button color in LVGL thread
-static void update_button_color_cb(void *arg)
+static void ui_set_button_color(uint32_t color)
 {
-    uint32_t color = (uint32_t)(uintptr_t)arg;
-    if (btn_es8311_test != NULL)
+    if (lvgl_port_lock(100))
     {
-        lv_obj_set_style_bg_color(btn_es8311_test, lv_color_hex(color), LV_PART_MAIN);
+        if (btn_es8311_test != NULL)
+        {
+            lv_obj_set_style_bg_color(btn_es8311_test, lv_color_hex(color), LV_PART_MAIN);
+        }
+        lvgl_port_unlock();
     }
 }
 
@@ -112,8 +122,8 @@ static void lvgl_es8311_test_task(void *arg)
             if (data == NULL)
             {
                 printf("Memory allocation failed\r\n");
-                lv_async_call(update_button_text_cb, (void *)"Audio Test");
-                lv_async_call(update_button_color_cb, (void *)(uintptr_t)0x2196F3); // Restore default blue color
+                ui_set_button_text("Audio Test");
+                ui_set_button_color(0x2196F3); // Restore default blue color
                 continue;
             }
             
@@ -123,7 +133,7 @@ static void lvgl_es8311_test_task(void *arg)
             
             // Phase 1: Recording (with countdown)
             printf("Recording...\r\n");
-            lv_async_call(update_button_color_cb, (void *)(uintptr_t)0xFF5722); // Recording phase: red color
+            ui_set_button_color(0xFF5722); // Recording phase: red color
             
             esp_codec_dev_set_in_gain(input_dev, 100.0); // Set maximum gain
             
@@ -132,11 +142,11 @@ static void lvgl_es8311_test_task(void *arg)
             {
                 int current_chunk_size = (i == num_chunks - 1) ? (total_size - bytes_read) : chunk_size;
                 
-                // Update countdown
+                // Update countdown (synchronous update, safe to use a local buffer)
                 int remaining_seconds = RECORD_SECONDS - (i * CHUNK_DURATION_MS / 1000);
                 char countdown_text[32];
                 snprintf(countdown_text, sizeof(countdown_text), "Recording %ds", remaining_seconds);
-                lv_async_call(update_button_text_cb, (void *)countdown_text);
+                ui_set_button_text(countdown_text);
                 
                 err = esp_codec_dev_read(input_dev, data + bytes_read, current_chunk_size);
                 if (err != ESP_CODEC_DEV_OK)
@@ -151,8 +161,8 @@ static void lvgl_es8311_test_task(void *arg)
             printf("Recorded %d bytes\n", bytes_read);
             
             // Phase 2: Playback
-            lv_async_call(update_button_text_cb, (void *)"Replaying");
-            lv_async_call(update_button_color_cb, (void *)(uintptr_t)0x4CAF50); // Playback phase: green color
+            ui_set_button_text("Replaying");
+            ui_set_button_color(0x4CAF50); // Playback phase: green color
             vTaskDelay(pdMS_TO_TICKS(100)); // Wait for UI update
             
             printf("Replaying...\r\n");
@@ -168,8 +178,8 @@ static void lvgl_es8311_test_task(void *arg)
             heap_caps_free(data);
             
             // Phase 3: Restore initial state
-            lv_async_call(update_button_text_cb, (void *)"Audio Test");
-            lv_async_call(update_button_color_cb, (void *)(uintptr_t)0x2196F3); // Restore default blue color
+            ui_set_button_text("Audio Test");
+            ui_set_button_color(0x2196F3); // Restore default blue color
             
             printf("Audio test completed\r\n");
         }        
