@@ -7,11 +7,8 @@
 #include "driver/i2c_master.h"
 
 #define XPOWERS_CHIP_AXP2101
-// This board's AXP2101 reports chip ID 0x47 instead of the default 0x4A.
-// Pre-include the constants header, then override the chip ID before XPowersLib.h pulls it in.
-#include "REG/AXP2101Constants.h"
-#undef XPOWERS_AXP2101_CHIP_ID
-#define XPOWERS_AXP2101_CHIP_ID (0x47)
+// AXP2101 supports two chip IDs: 0x4A (standard) and 0x47 (alternate batch).
+// Both are handled in XPowersAXP2101.tpp initImpl() via XPOWERS_AXP2101_CHIP_ID_ALT.
 #include "XPowersLib.h"
 static const char *TAG = "AXP2101";
 

@@ -3018,7 +3018,7 @@ protected:
 
     bool initImpl()
     {
-        if (getChipID() == XPOWERS_AXP2101_CHIP_ID) {
+        if (getChipID() == XPOWERS_AXP2101_CHIP_ID || getChipID() == XPOWERS_AXP2101_CHIP_ID_ALT) {
             setChipModel(XPOWERS_AXP2101);
             disableTSPinMeasure();      //Disable NTC temperature detection by default
             return true;
