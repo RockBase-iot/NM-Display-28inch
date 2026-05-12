@@ -164,20 +164,26 @@ public:
             FT6336_I2C_ADDR,
             -1, -1,             // SDA/SCL: -1 = bus already up
             -1, -1,             // IRQ/RST: not connected on this board
-            SCREEN_WIDTH, SCREEN_HEIGHT,
+            // Pass the sensor's PORTRAIT native resolution (240×320) so that
+            // the 1:1 scaling inside IICTouch gives raw portrait coords.
+            // The rotation_map swap_xy below then converts to landscape.
+            240, 320,
             I2C_FREQ_HZ);
 
         tp->load_config({
             .init_cmds      = nullptr,
             .init_cmds_size = 0,
-            // FT6336 raw range matches physical LCD pixels (240×320 portrait).
+            // FT6336 raw range in portrait orientation.
             .x_max = 240,
             .y_max = 320,
-            // 90° landscape: FT6336 portrait-X maps to display-X but runs in
-            // the opposite direction → mirror_x = true.
+            // 90° landscape: the sensor's portrait X axis aligns with the
+            // display's landscape Y axis, and portrait Y aligns with landscape X.
+            // A simple swap_xy (no mirroring) produces correct LVGL coordinates.
+            //   After swap: pt.x = raw_y (0-319 = LVGL x range ✓)
+            //               pt.y = raw_x (0-239 = LVGL y range ✓)
             .rotation_map = {
                 [0] = { false, false, false },  // 0°
-                [1] = { false, true,  false },  // 90°  ← X mirrored
+                [1] = { true,  false, true  },  // 90°  swap_xy + mirror_y
                 [2] = { false, false, false },  // 180°
                 [3] = { false, false, false },  // 270°
             },

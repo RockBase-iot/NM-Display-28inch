@@ -54,8 +54,12 @@ private:
         if (_curRot.swap_xy) {
             uint16_t t = pt->x; pt->x = pt->y; pt->y = t;
         }
-        if (_curRot.mirror_x) pt->x = _width  - 1 - pt->x;
-        if (_curRot.mirror_y) pt->y = _height - 1 - pt->y;
+        // After swap_xy the effective axis lengths are also swapped:
+        // what was _height is now the X range, and _width is now the Y range.
+        uint16_t eff_w = _curRot.swap_xy ? _height : _width;
+        uint16_t eff_h = _curRot.swap_xy ? _width  : _height;
+        if (_curRot.mirror_x) pt->x = eff_w - 1 - pt->x;
+        if (_curRot.mirror_y) pt->y = eff_h - 1 - pt->y;
     }
 
 public:
