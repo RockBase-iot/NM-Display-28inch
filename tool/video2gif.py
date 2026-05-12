@@ -27,6 +27,7 @@ Usage examples:
 
 import argparse
 import os
+import shutil
 import sys
 import time
 
@@ -71,6 +72,8 @@ def parse_args():
                    help="End time in seconds (default: entire video)")
     p.add_argument("--fit", choices=["contain", "cover", "stretch"], default="contain",
                    help="How to fit video into target resolution (default: contain)")
+    p.add_argument("--speed", "-x", type=float, default=1.0,
+                   help="Playback speed multiplier (default: 1.0, e.g. 1.5 = 50%% faster)")
     return p.parse_args()
 
 
@@ -205,10 +208,11 @@ def convert(args):
 
     # Duration (in ms) between GIF frames — rounded to the nearest 10 ms
     # (GIF delay unit is 1/100 s, so 10 ms granularity)
-    frame_delay_ms = max(10, round(1000 / args.fps / 10) * 10)
+    # Apply speed multiplier: higher speed → shorter delay
+    frame_delay_ms = max(10, round(1000 / args.fps / args.speed / 10) * 10)
 
     print(f"[INFO] Extracting {len(source_indices)} frames "
-          f"(delay={frame_delay_ms} ms each)  …")
+          f"(delay={frame_delay_ms} ms each, speed={args.speed}x)  …")
 
     # ── Extract and resize frames ─────────────────────────────────────────────
     dither = not args.no_dither
@@ -303,8 +307,16 @@ def convert(args):
     else:
         print("[OK]   File fits within the 2 MB SPIFFS budget.")
 
-    spiffs_data_dir = os.path.join(
-        os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "data")
+    # ── Always keep a copy in resource/ ──────────────────────────────────────
+    project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    resource_dir = os.path.join(project_root, "resource")
+    resource_copy = os.path.join(resource_dir, os.path.basename(output_path))
+    os.makedirs(resource_dir, exist_ok=True)
+    if os.path.abspath(output_path) != os.path.abspath(resource_copy):
+        shutil.copy2(output_path, resource_copy)
+        print(f"[INFO] Resource copy  → {resource_copy}")
+
+    spiffs_data_dir = os.path.join(project_root, "data")
     if not output_path.startswith(spiffs_data_dir):
         print(f"\n[TIP]  To use as boot animation, copy to: {spiffs_data_dir}\\boot.gif")
         print("       Then run: pio run --target uploadfs")

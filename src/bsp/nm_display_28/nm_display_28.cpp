@@ -41,7 +41,8 @@ DRAM_ATTR static uint8_t _st7789_raset[]   = {
 
 static const lcd_init_cmd_t _st7789_init_cmds[] = {
     { 0x11, nullptr,        0,  120 },  // SLPOUT  — sleep out (120 ms)
-    { 0x13, nullptr,        0,    0 },  // NORON   — normal display mode
+    { 0x13, nullptr,        0,    0 },  // NORON   — normal display mode on
+    { 0x21, nullptr,        0,    0 },  // INVON   — display inversion on (required by this panel)
     { 0x36, nullptr,        0,    0 },  // MADCTL  — placeholder; rotate() sends the real value
     { 0xB6, _st7789_dfunc,  2,    0 },  // DFUNCTR
     { 0xB0, _st7789_ramctl, 2,    0 },  // RAMCTRL

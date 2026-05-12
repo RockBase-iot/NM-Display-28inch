@@ -11,6 +11,12 @@
 // animation task.  Callers should start the next application phase (e.g. FactoryTest)
 // from that callback.
 
+// Maximum frame delay in milliseconds — caps the GIF's embedded inter-frame delay.
+// Lower value = faster playback.  40 ms ≈ 25 fps; 33 ms ≈ 30 fps.
+#ifndef BOOT_ANIM_MAX_FRAME_MS
+#define BOOT_ANIM_MAX_FRAME_MS  40
+#endif
+
 #include <functional>
 #include <AnimatedGIF.h>
 #include "../../drivers/display/hal.h"

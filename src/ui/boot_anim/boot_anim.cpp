@@ -131,9 +131,14 @@ void BootAnim::_play_loop()
             _gif.reset();    // loop: restart from the first frame
         }
 
-        // Sleep for the frame duration minus the time already spent decoding.
+        // Sleep for the frame duration, clamped to [1, BOOT_ANIM_MAX_FRAME_MS].
+        // Override GIF's embedded delay to control playback speed.
         const int min_delay = 1;
-        vTaskDelay(pdMS_TO_TICKS(delay_ms > min_delay ? delay_ms : min_delay));
+        const int max_delay = BOOT_ANIM_MAX_FRAME_MS;   // cap: defined in boot_anim.h
+        int actual_delay = delay_ms < min_delay ? min_delay
+                         : delay_ms > max_delay ? max_delay
+                         : delay_ms;
+        vTaskDelay(pdMS_TO_TICKS(actual_delay));
     }
 
     _gif.close();
@@ -159,25 +164,16 @@ void BootAnim::_gif_draw(GIFDRAW *pDraw)
 
     const int width = pDraw->iWidth;
 
-    // GIF palette may be stored in BGR565 order (Pillow quantize quirk);
-    // swap R and B channels so the frame buffer matches LVGL's RGB565 format
-    // which pushColors(swap_bytes=true) expects.
-    auto swap_rb = [](uint16_t c) -> uint16_t {
-        uint16_t r = (c >> 11) & 0x1F;
-        uint16_t b =  c        & 0x1F;
-        return (b << 11) | (c & 0x07E0) | r;
-    };
-
     if (pDraw->ucHasTransparency) {
         const uint8_t trans_index = pDraw->ucTransparent;
         for (int x = 0; x < width; x++) {
             if (src[x] != trans_index) {
-                dest[x] = swap_rb(pal[src[x]]);
+                dest[x] = pal[src[x]];
             }
         }
     } else {
         for (int x = 0; x < width; x++) {
-            dest[x] = swap_rb(pal[src[x]]);
+            dest[x] = pal[src[x]];
         }
     }
 }
