@@ -12,9 +12,9 @@
 // from that callback.
 
 // Maximum frame delay in milliseconds — caps the GIF's embedded inter-frame delay.
-// Lower value = faster playback.  40 ms ≈ 25 fps; 33 ms ≈ 30 fps.
+// Lower value = faster playback.  33 ms ≈ 30 fps; 16 ms ≈ 60 fps.
 #ifndef BOOT_ANIM_MAX_FRAME_MS
-#define BOOT_ANIM_MAX_FRAME_MS  40
+#define BOOT_ANIM_MAX_FRAME_MS  33
 #endif
 
 #include <functional>
@@ -54,11 +54,17 @@ private:
     // pDraw->y and pDraw->pPixels / pPalette describe the current row.
     static void _gif_draw(GIFDRAW *pDraw);
 
-    // SPIFFS I/O callbacks required by the AnimatedGIF library.
+    // SPIFFS I/O callbacks (fallback when PSRAM preload fails).
     static void    *_gif_open (const char *fname, int32_t *pSize);
     static void     _gif_close(void *handle);
     static int32_t  _gif_read (GIFFILE *pFile, uint8_t *pBuf, int32_t iLen);
     static int32_t  _gif_seek (GIFFILE *pFile, int32_t iPosition);
+
+    // Memory I/O callbacks — used when the GIF is preloaded into PSRAM.
+    static void    *_gif_open_mem (const char *fname, int32_t *pSize);
+    static void     _gif_close_mem(void *handle);
+    static int32_t  _gif_read_mem (GIFFILE *pFile, uint8_t *pBuf, int32_t iLen);
+    static int32_t  _gif_seek_mem (GIFFILE *pFile, int32_t iPosition);
 
     Display      *_disp;
     Touch        *_touch;
@@ -67,6 +73,8 @@ private:
     TaskHandle_t  _task_handle  = nullptr;
     volatile bool _stop_flag    = false;
     uint16_t     *_frame_buf    = nullptr;   // 320×240 × 2 bytes in PSRAM
+    uint8_t      *_gif_data     = nullptr;   // entire GIF file preloaded in PSRAM
+    size_t        _gif_data_size = 0;
 
     // AnimatedGIF is a member (heap-allocated with this object) so its ~8 KB
     // internal LZW decode buffer does NOT live on the FreeRTOS task stack.

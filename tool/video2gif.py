@@ -40,7 +40,7 @@ DEFAULT_WIDTH   = 320
 DEFAULT_HEIGHT  = 240
 DEFAULT_FPS     = 12
 DEFAULT_COLORS  = 128
-MAX_FILE_BYTES  = 2 * 1024 * 1024   # 2 MB SPIFFS budget warning threshold
+MAX_FILE_BYTES  = 6 * 1024 * 1024   # ~6 MB warning (actual SPIFFS = 7.94 MB)
 PALETTE_SAMPLES = 32                 # Number of frames sampled to build the global palette
 
 

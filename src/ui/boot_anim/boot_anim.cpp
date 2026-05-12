@@ -6,6 +6,7 @@
 
 #include <SPIFFS.h>
 #include <esp_heap_caps.h>
+#include <esp_timer.h>
 
 // ─── Module-level state shared with static callbacks ─────────────────────────
 
@@ -53,6 +54,25 @@ void BootAnim::start(ExitCallback on_exit)
 
     memset(_frame_buf, 0, SCREEN_WIDTH * SCREEN_HEIGHT * sizeof(uint16_t));
 
+    // Preload the entire GIF file into PSRAM so every frame is decoded from
+    // fast PSRAM rather than slow SPIFFS (eliminates per-frame seek latency).
+    {
+        File f = SPIFFS.open(_gif_path, "r");
+        if (f) {
+            _gif_data_size = f.size();
+            _gif_data = static_cast<uint8_t *>(
+                heap_caps_malloc(_gif_data_size, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
+            if (_gif_data) {
+                f.read(_gif_data, _gif_data_size);
+                LOG_I("BootAnim: GIF preloaded into PSRAM (%u bytes)", _gif_data_size);
+            } else {
+                LOG_W("BootAnim: PSRAM alloc for GIF data failed — falling back to SPIFFS");
+                _gif_data_size = 0;
+            }
+            f.close();
+        }
+    }
+
     xTaskCreatePinnedToCore(
         _task_entry,
         "boot_anim",
@@ -90,8 +110,14 @@ void BootAnim::_play_loop()
     // heap (with the BootAnim object), NOT on this task's stack.
     _gif.begin(GIF_PALETTE_RGB565_LE);   // 16-bit little-endian matches ST7789
 
-    if (!_gif.open(_gif_path, _gif_open, _gif_close, _gif_read, _gif_seek, _gif_draw)) {
+    // Use memory callbacks if GIF was preloaded into PSRAM; otherwise SPIFFS.
+    bool opened = _gif_data
+        ? _gif.open(_gif_path, _gif_open_mem, _gif_close_mem, _gif_read_mem, _gif_seek_mem, _gif_draw)
+        : _gif.open(_gif_path, _gif_open,     _gif_close,     _gif_read,     _gif_seek,     _gif_draw);
+
+    if (!opened) {
         LOG_E("BootAnim: cannot open %s — skipping animation", _gif_path);
+        if (_gif_data) { heap_caps_free(_gif_data); _gif_data = nullptr; }
         heap_caps_free(_frame_buf);
         _frame_buf  = nullptr;
         _task_handle = nullptr;
@@ -102,6 +128,9 @@ void BootAnim::_play_loop()
     LOG_I("BootAnim: playing %s  (%d x %d)", _gif_path, _gif.getCanvasWidth(), _gif.getCanvasHeight());
 
     while (!_stop_flag) {
+        // Record frame start time so decode+push cost is subtracted from the sleep.
+        int64_t t_start = esp_timer_get_time();
+
         int delay_ms = 0;
         bool has_more = _gif.playFrame(false, &delay_ms);
 
@@ -131,17 +160,25 @@ void BootAnim::_play_loop()
             _gif.reset();    // loop: restart from the first frame
         }
 
-        // Sleep for the frame duration, clamped to [1, BOOT_ANIM_MAX_FRAME_MS].
-        // Override GIF's embedded delay to control playback speed.
-        const int min_delay = 1;
-        const int max_delay = BOOT_ANIM_MAX_FRAME_MS;   // cap: defined in boot_anim.h
-        int actual_delay = delay_ms < min_delay ? min_delay
-                         : delay_ms > max_delay ? max_delay
-                         : delay_ms;
-        vTaskDelay(pdMS_TO_TICKS(actual_delay));
+        // Compute how long decode+push actually took, then sleep only the
+        // remainder so the total frame time hits the target interval.
+        // This prevents decode/push latency from stacking on top of the sleep.
+        int target_ms = delay_ms > BOOT_ANIM_MAX_FRAME_MS ? BOOT_ANIM_MAX_FRAME_MS : delay_ms;
+        int elapsed_ms = (int)((esp_timer_get_time() - t_start) / 1000);
+        int sleep_ms = target_ms - elapsed_ms;
+        if (sleep_ms > 1) {
+            vTaskDelay(pdMS_TO_TICKS(sleep_ms));
+        } else {
+            taskYIELD();  // yield briefly so other tasks stay responsive
+        }
     }
 
     _gif.close();
+    if (_gif_data) {
+        heap_caps_free(_gif_data);
+        _gif_data      = nullptr;
+        _gif_data_size = 0;
+    }
     heap_caps_free(_frame_buf);
     _frame_buf   = nullptr;
     _task_handle = nullptr;
@@ -209,5 +246,31 @@ int32_t BootAnim::_gif_seek(GIFFILE *pFile, int32_t iPosition)
     File *f = static_cast<File *>(pFile->fHandle);
     f->seek(static_cast<uint32_t>(iPosition));
     pFile->iPos = iPosition;  // sync library's position counter
+    return iPosition;
+}
+
+// ─── PSRAM memory I/O callbacks ───────────────────────────────────────────────
+
+void *BootAnim::_gif_open_mem(const char * /*fname*/, int32_t *pSize)
+{
+    *pSize = static_cast<int32_t>(s_instance->_gif_data_size);
+    return s_instance->_gif_data;   // fHandle = raw data pointer
+}
+
+void BootAnim::_gif_close_mem(void * /*handle*/) { /* nothing to close */ }
+
+int32_t BootAnim::_gif_read_mem(GIFFILE *pFile, uint8_t *pBuf, int32_t iLen)
+{
+    const uint8_t *data = static_cast<const uint8_t *>(pFile->fHandle);
+    int32_t remaining = pFile->iSize - pFile->iPos;
+    if (iLen > remaining) iLen = remaining;
+    memcpy(pBuf, data + pFile->iPos, static_cast<size_t>(iLen));
+    pFile->iPos += iLen;
+    return iLen;
+}
+
+int32_t BootAnim::_gif_seek_mem(GIFFILE *pFile, int32_t iPosition)
+{
+    pFile->iPos = iPosition;
     return iPosition;
 }
