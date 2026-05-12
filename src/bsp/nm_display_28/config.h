@@ -19,7 +19,7 @@
 // Display — ST7789 SPI, logical 320x240 after 270° rotation
 #define SCREEN_WIDTH      320
 #define SCREEN_HEIGHT     240
-#define DISPLAY_ROTATION  270
+#define DISPLAY_ROTATION  90
 
 // SPI bus — dedicated to LCD (SPI2)
 #define LCD_SPI_HOST      SPI2_HOST

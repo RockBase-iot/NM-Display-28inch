@@ -1,6 +1,8 @@
 #include "application.h"
 #include "../drivers/devices/hal.h"
+#include "../drivers/display/lvgl_port.h"
 #include "../utils/logger.h"
+#include <lvgl.h>
 
 NMDisplay28App& NMDisplay28App::instance() {
     static NMDisplay28App app;
@@ -9,7 +11,7 @@ NMDisplay28App& NMDisplay28App::instance() {
 
 bool NMDisplay28App::init() {
     Board& board = Board::GetInstance();
-    board.init();   // Serial.begin() is called inside
+    board.init();   // Serial.begin(), Wire.begin(), TCA9554 LCD reset, SPI2 start
 
     LOG_I("Board: %s", board.get_board_model().c_str());
     LOG_I("Chip:  ESP32-S3 @ %u MHz  flash=%uMB  psram=%uMB",
@@ -17,7 +19,23 @@ bool NMDisplay28App::init() {
           ESP.getFlashChipSize() / (1024 * 1024),
           ESP.getPsramSize()     / (1024 * 1024));
 
-    // TODO Phase 2: LvglPort::init(board.get_display(), board.get_touch(), ...)
+    // Phase 2: display + touch + LVGL
+    Display *disp  = board.get_display();  // ST7789 init + 270° rotate
+    Touch   *touch = board.get_touch();    // FT6336 init (may be nullptr on failure)
+
+    if (!disp) {
+        LOG_E("Display init failed — halting");
+        while (true) delay(1000);
+    }
+
+    if (!LvglPort::init(disp, touch, disp->width(), disp->height())) {
+        LOG_E("LvglPort init failed — halting");
+        while (true) delay(1000);
+    }
+
+    // Turn on backlight once LVGL is ready
+    disp->blctrl(0.85f);
+
     // TODO Phase 3: axp2101 / qmi8658 / pcf85063 port init
     // TODO Phase 4: sdcard / wifi / button port init
     // TODO Phase 5: camera_port_init()
@@ -27,16 +45,20 @@ bool NMDisplay28App::init() {
 }
 
 void NMDisplay28App::begin() {
-    // TODO Phase 2+: conditionally launch tasks based on profile.has_xxx.
-    // Example (uncomment in Phase 5):
-    // const BoardProfile& prof = Board::GetInstance().get_profile();
-    // if (prof.has_camera) {
-    //     xTaskCreatePinnedToCore(camera_task, "cam_task",
-    //                             TASK_STACK_CAMERA, nullptr,
-    //                             TASK_PRIORITY_CAMERA, nullptr, CameraTaskCore);
-    // }
+    // Create the placeholder Hello World screen under LVGL mutex.
+    if (LVGL_LOCK(500)) {
+        lv_obj_t *scr = lv_scr_act();
+        lv_obj_set_style_bg_color(scr, lv_color_hex(0x1A1A2E), LV_PART_MAIN);
 
-    // Placeholder heartbeat task — remove once real tasks are running.
+        lv_obj_t *label = lv_label_create(scr);
+        lv_label_set_text(label, "Hello, World!");
+        lv_obj_set_style_text_color(label, lv_color_hex(0xE0E0FF), LV_PART_MAIN | LV_STATE_DEFAULT);
+        lv_obj_center(label);
+
+        LVGL_UNLOCK();
+    }
+
+    // Heartbeat logger task (runs until real tasks replace it)
     xTaskCreatePinnedToCore(
         [](void*) {
             uint32_t tick = 0;
@@ -45,7 +67,7 @@ void NMDisplay28App::begin() {
                       tick++,
                       ESP.getFreeHeap(),
                       ESP.getFreePsram());
-                vTaskDelay(pdMS_TO_TICKS(2000));
+                vTaskDelay(pdMS_TO_TICKS(5000));
             }
         },
         "heartbeat", TASK_STACK_SENSOR, nullptr, TASK_PRIORITY_IDLE + 1, nullptr, CORE_0

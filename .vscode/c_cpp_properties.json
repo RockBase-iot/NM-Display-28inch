@@ -497,7 +497,7 @@
                 "CONFIG_SPIRAM_CACHE_WORKAROUND=1",
                 "LV_LVGL_H_INCLUDE_SIMPLE=1",
                 "LV_CONF_INCLUDE_SIMPLE=1",
-                "LV_COLOR_16_SWAP=1",
+                "LVGL_ENABLE=1",
                 "UI_LAYOUT_320x240=1",
                 "CORE_DEBUG_LEVEL=3",
                 "HAVE_CONFIG_H",
