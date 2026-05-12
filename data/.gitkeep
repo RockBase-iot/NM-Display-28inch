@@ -1,0 +1,2 @@
+# Place boot.gif here (320x240 px, animated GIF, < 2 MB).
+# Upload to SPIFFS with: pio run --target uploadfs

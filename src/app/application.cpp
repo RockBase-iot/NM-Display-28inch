@@ -2,6 +2,9 @@
 #include "../drivers/devices/hal.h"
 #include "../drivers/display/lvgl_port.h"
 #include "../utils/logger.h"
+#include "../ui/boot_anim/boot_anim.h"
+#include "../ui/factory_test/factory_test.h"
+#include <SPIFFS.h>
 #include <lvgl.h>
 
 NMDisplay28App& NMDisplay28App::instance() {
@@ -36,6 +39,14 @@ bool NMDisplay28App::init() {
     // Turn on backlight once LVGL is ready
     disp->blctrl(0.85f);
 
+    // Mount SPIFFS so boot.gif is accessible before begin() is called.
+    if (!SPIFFS.begin(true)) {
+        LOG_W("SPIFFS mount failed — boot animation will be skipped");
+    } else {
+        LOG_I("SPIFFS: total=%u  used=%u bytes",
+              SPIFFS.totalBytes(), SPIFFS.usedBytes());
+    }
+
     // TODO Phase 3: axp2101 / qmi8658 / pcf85063 port init
     // TODO Phase 4: sdcard / wifi / button port init
     // TODO Phase 5: camera_port_init()
@@ -45,31 +56,17 @@ bool NMDisplay28App::init() {
 }
 
 void NMDisplay28App::begin() {
-    // Create the placeholder Hello World screen under LVGL mutex.
-    if (LVGL_LOCK(500)) {
-        lv_obj_t *scr = lv_scr_act();
-        lv_obj_set_style_bg_color(scr, lv_color_hex(0x1A1A2E), LV_PART_MAIN);
+    Board   &board = Board::GetInstance();
+    Display *disp  = board.get_display();
+    Touch   *touch = board.get_touch();
 
-        lv_obj_t *label = lv_label_create(scr);
-        lv_label_set_text(label, "Hello, World!");
-        lv_obj_set_style_text_color(label, lv_color_hex(0xE0E0FF), LV_PART_MAIN | LV_STATE_DEFAULT);
-        lv_obj_center(label);
+    // BootAnim and FactoryTest are heap-allocated; they live until device restart.
+    BootAnim    *boot_anim    = new BootAnim(disp, touch, "/boot.gif");
+    FactoryTest *factory_test = new FactoryTest(board);
 
-        LVGL_UNLOCK();
-    }
-
-    // Heartbeat logger task (runs until real tasks replace it)
-    xTaskCreatePinnedToCore(
-        [](void*) {
-            uint32_t tick = 0;
-            while (true) {
-                LOG_I("[heartbeat] tick=%u  heap=%u  psram=%u",
-                      tick++,
-                      ESP.getFreeHeap(),
-                      ESP.getFreePsram());
-                vTaskDelay(pdMS_TO_TICKS(5000));
-            }
-        },
-        "heartbeat", TASK_STACK_SENSOR, nullptr, TASK_PRIORITY_IDLE + 1, nullptr, CORE_0
-    );
+    // When the user taps the screen the animation exits and factory test starts.
+    boot_anim->start([factory_test]() {
+        LOG_I("Boot animation exited — starting factory test");
+        factory_test->start();
+    });
 }
