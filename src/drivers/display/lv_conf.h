@@ -171,7 +171,7 @@
 #define LV_FONT_MONTSERRAT_10 0
 #define LV_FONT_MONTSERRAT_12 0
 #define LV_FONT_MONTSERRAT_14 1   /* Default widget font */
-#define LV_FONT_MONTSERRAT_16 0
+#define LV_FONT_MONTSERRAT_16 1   /* Used for bold-looking test titles */
 #define LV_FONT_MONTSERRAT_18 0
 #define LV_FONT_MONTSERRAT_20 0
 #define LV_FONT_MONTSERRAT_22 0
@@ -196,7 +196,7 @@
 #define LV_FONT_SIMSUN_16_CJK            0
 
 /* Built-in pixel fonts */
-#define LV_FONT_UNSCII_8  0
+#define LV_FONT_UNSCII_8  1   /* Monospace font for test body / aligned output */
 #define LV_FONT_UNSCII_16 0
 
 /* Custom font declarations — add here if using external fonts */

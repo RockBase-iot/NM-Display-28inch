@@ -20,6 +20,20 @@
 #define COLOR_TEXT      0xECF0F1
 #define COLOR_SUBTEXT   0xBDC3C7
 
+// ─── Verdict button callbacks ─────────────────────────────────────────────────
+
+void FactoryTest::_on_ok_btn(lv_event_t *e)
+{
+    if (lv_event_get_code(e) != LV_EVENT_CLICKED) return;
+    static_cast<FactoryTest *>(lv_event_get_user_data(e))->_verdict = 1;
+}
+
+void FactoryTest::_on_fail_btn(lv_event_t *e)
+{
+    if (lv_event_get_code(e) != LV_EVENT_CLICKED) return;
+    static_cast<FactoryTest *>(lv_event_get_user_data(e))->_verdict = 0;
+}
+
 // ─── Constructor ─────────────────────────────────────────────────────────────
 
 FactoryTest::FactoryTest(Board &board) : _board(board) {}
@@ -95,24 +109,8 @@ void FactoryTest::_run_all()
 
 // ─── LVGL screen helpers ─────────────────────────────────────────────────────
 
-static const char *_result_str(FactoryTest::Result r) {
-    switch (r) {
-        case FactoryTest::Result::PASS: return "  PASS  ";
-        case FactoryTest::Result::FAIL: return "  FAIL  ";
-        default:                         return "  ----  ";
-    }
-}
-
-static uint32_t _result_color(FactoryTest::Result r) {
-    switch (r) {
-        case FactoryTest::Result::PASS: return COLOR_PASS;
-        case FactoryTest::Result::FAIL: return COLOR_FAIL;
-        default:                         return COLOR_SKIP;
-    }
-}
-
 void FactoryTest::_show_screen(uint8_t index, const char *name,
-                                const char *body, Result result)
+                                const char *body, Result /*result*/)
 {
     if (!LVGL_LOCK(500)) return;
 
@@ -120,54 +118,97 @@ void FactoryTest::_show_screen(uint8_t index, const char *name,
     lv_obj_set_style_bg_color(scr, lv_color_hex(COLOR_BG), 0);
     lv_obj_set_style_bg_opa(scr, LV_OPA_COVER, 0);
     lv_obj_set_style_border_width(scr, 0, 0);
+    lv_obj_clear_flag(scr, LV_OBJ_FLAG_SCROLLABLE);
 
-    // Title bar
+    // ── Title bar ─────────────────────────────────────────────────────────────
     lv_obj_t *title_bar = lv_obj_create(scr);
-    lv_obj_set_size(title_bar, SCREEN_WIDTH, 36);
+    lv_obj_set_size(title_bar, SCREEN_WIDTH, 40);
     lv_obj_align(title_bar, LV_ALIGN_TOP_MID, 0, 0);
     lv_obj_set_style_bg_color(title_bar, lv_color_hex(COLOR_TITLE_BG), 0);
     lv_obj_set_style_border_width(title_bar, 0, 0);
     lv_obj_set_style_radius(title_bar, 0, 0);
     lv_obj_set_style_pad_all(title_bar, 4, 0);
+    lv_obj_clear_flag(title_bar, LV_OBJ_FLAG_SCROLLABLE);
 
     char title_buf[48];
     snprintf(title_buf, sizeof(title_buf), "Test %d/9: %s", index, name);
     lv_obj_t *title_lbl = lv_label_create(title_bar);
     lv_label_set_text(title_lbl, title_buf);
     lv_obj_set_style_text_color(title_lbl, lv_color_hex(COLOR_TEXT), 0);
+    // Bold-weight title: use Montserrat 16 (larger = visually bold on small screen)
+    lv_obj_set_style_text_font(title_lbl, &lv_font_montserrat_16, 0);
     lv_obj_center(title_lbl);
 
-    // Body text
+    // ── Body text (monospace, aligned output) ──────────────────────────────────
     lv_obj_t *body_lbl = lv_label_create(scr);
     lv_label_set_text(body_lbl, body);
     lv_obj_set_style_text_color(body_lbl, lv_color_hex(COLOR_SUBTEXT), 0);
-    lv_obj_set_width(body_lbl, SCREEN_WIDTH - 20);
+    // Monospace font for aligned technical output
+    lv_obj_set_style_text_font(body_lbl, &lv_font_unscii_8, 0);
+    lv_obj_set_width(body_lbl, SCREEN_WIDTH - 16);
     lv_label_set_long_mode(body_lbl, LV_LABEL_LONG_WRAP);
-    lv_obj_align(body_lbl, LV_ALIGN_TOP_LEFT, 10, 46);
+    // Body area: title=40px, bottom buttons=54px  ->  y_start=44, max_h=142px
+    lv_obj_align(body_lbl, LV_ALIGN_TOP_LEFT, 8, 44);
 
-    // Result badge
-    lv_obj_t *badge = lv_label_create(scr);
-    lv_label_set_text(badge, _result_str(result));
-    lv_obj_set_style_text_color(badge, lv_color_hex(_result_color(result)), 0);
-    lv_obj_align(badge, LV_ALIGN_BOTTOM_MID, 0, -12);
-
-    // Cache widget pointers for live updates
+    // Cache body widget pointer for live updates (_lv_badge_label unused)
     _lv_body_label  = body_lbl;
-    _lv_badge_label = badge;
+    _lv_badge_label = nullptr;
 
     lv_scr_load(scr);
     LVGL_UNLOCK();
 }
 
-void FactoryTest::_update_screen(const char *body, Result result)
+void FactoryTest::_update_screen(const char *body, Result /*result*/)
 {
-    if (!_lv_body_label || !_lv_badge_label) return;
+    if (!_lv_body_label) return;
     if (!LVGL_LOCK(100)) return;
-    lv_label_set_text(static_cast<lv_obj_t *>(_lv_body_label),  body);
-    lv_label_set_text(static_cast<lv_obj_t *>(_lv_badge_label), _result_str(result));
-    lv_obj_set_style_text_color(static_cast<lv_obj_t *>(_lv_badge_label),
-                                 lv_color_hex(_result_color(result)), 0);
+    lv_label_set_text(static_cast<lv_obj_t *>(_lv_body_label), body);
     LVGL_UNLOCK();
+}
+
+bool FactoryTest::_wait_verdict()
+{
+    _verdict = -1;
+
+    if (!LVGL_LOCK(500)) return false;
+
+    lv_obj_t *scr = lv_scr_act();
+
+    // ── Ok button (green, left) ────────────────────────────────────────────────
+    lv_obj_t *ok_btn = lv_btn_create(scr);
+    lv_obj_set_size(ok_btn, 142, 44);
+    lv_obj_align(ok_btn, LV_ALIGN_BOTTOM_LEFT, 8, -6);
+    lv_obj_set_style_bg_color(ok_btn, lv_color_hex(COLOR_PASS), 0);
+    lv_obj_set_style_bg_color(ok_btn, lv_color_hex(0x27AE60), LV_STATE_PRESSED);
+    lv_obj_set_style_border_width(ok_btn, 0, 0);
+    lv_obj_set_style_radius(ok_btn, 6, 0);
+    lv_obj_add_event_cb(ok_btn, _on_ok_btn, LV_EVENT_CLICKED, this);
+    lv_obj_t *ok_lbl = lv_label_create(ok_btn);
+    lv_label_set_text(ok_lbl, LV_SYMBOL_OK "  Ok");
+    lv_obj_set_style_text_color(ok_lbl, lv_color_hex(0xFFFFFF), 0);
+    lv_obj_center(ok_lbl);
+
+    // ── Failed button (red, right) ─────────────────────────────────────────────
+    lv_obj_t *fail_btn = lv_btn_create(scr);
+    lv_obj_set_size(fail_btn, 142, 44);
+    lv_obj_align(fail_btn, LV_ALIGN_BOTTOM_RIGHT, -8, -6);
+    lv_obj_set_style_bg_color(fail_btn, lv_color_hex(COLOR_FAIL), 0);
+    lv_obj_set_style_bg_color(fail_btn, lv_color_hex(0xC0392B), LV_STATE_PRESSED);
+    lv_obj_set_style_border_width(fail_btn, 0, 0);
+    lv_obj_set_style_radius(fail_btn, 6, 0);
+    lv_obj_add_event_cb(fail_btn, _on_fail_btn, LV_EVENT_CLICKED, this);
+    lv_obj_t *fail_lbl = lv_label_create(fail_btn);
+    lv_label_set_text(fail_lbl, LV_SYMBOL_CLOSE "  Failed");
+    lv_obj_set_style_text_color(fail_lbl, lv_color_hex(0xFFFFFF), 0);
+    lv_obj_center(fail_lbl);
+
+    LVGL_UNLOCK();
+
+    // Block FreeRTOS task until user presses a button
+    while (_verdict < 0) {
+        vTaskDelay(pdMS_TO_TICKS(50));
+    }
+    return (_verdict == 1);
 }
 
 bool FactoryTest::_wait_touch(uint32_t wait_ms)
@@ -195,11 +236,11 @@ void FactoryTest::_show_summary(int pass, int fail, int skip,
     char body[256];
     int  n = 0;
     n += snprintf(body + n, (int)sizeof(body) - n,
-                  "PASS  %d\nFAIL  %d\nSKIP  %d\n", pass, fail, skip);
+                  "PASS  %-3d\nFAIL  %-3d\nSKIP  %-3d\n", pass, fail, skip);
     if (fail_count > 0) {
-        n += snprintf(body + n, (int)sizeof(body) - n, "\nFailed:");
+        n += snprintf(body + n, (int)sizeof(body) - n, "\nFailed items:");
         for (int i = 0; i < fail_count && n < (int)sizeof(body) - 20; i++) {
-            n += snprintf(body + n, (int)sizeof(body) - n, " %s", fail_names[i]);
+            n += snprintf(body + n, (int)sizeof(body) - n, "\n  - %s", fail_names[i]);
         }
     }
 
@@ -209,28 +250,37 @@ void FactoryTest::_show_summary(int pass, int fail, int skip,
     lv_obj_set_style_bg_color(scr, lv_color_hex(COLOR_BG), 0);
     lv_obj_set_style_bg_opa(scr, LV_OPA_COVER, 0);
     lv_obj_set_style_border_width(scr, 0, 0);
+    lv_obj_clear_flag(scr, LV_OBJ_FLAG_SCROLLABLE);
 
+    // Bold title (Montserrat 16)
     lv_obj_t *title_lbl = lv_label_create(scr);
     lv_label_set_text(title_lbl, "Factory Test Complete");
     lv_obj_set_style_text_color(title_lbl, lv_color_hex(COLOR_TEXT), 0);
-    lv_obj_align(title_lbl, LV_ALIGN_TOP_MID, 0, 10);
+    lv_obj_set_style_text_font(title_lbl, &lv_font_montserrat_16, 0);
+    lv_obj_align(title_lbl, LV_ALIGN_TOP_MID, 0, 8);
 
+    // Monospace body (UNSCII 8)
     lv_obj_t *body_lbl = lv_label_create(scr);
     lv_label_set_text(body_lbl, body);
     lv_obj_set_style_text_color(body_lbl, lv_color_hex(COLOR_SUBTEXT), 0);
-    lv_obj_set_width(body_lbl, SCREEN_WIDTH - 20);
+    lv_obj_set_style_text_font(body_lbl, &lv_font_unscii_8, 0);
+    lv_obj_set_width(body_lbl, SCREEN_WIDTH - 16);
     lv_label_set_long_mode(body_lbl, LV_LABEL_LONG_WRAP);
-    lv_obj_align(body_lbl, LV_ALIGN_TOP_LEFT, 10, 40);
+    lv_obj_align(body_lbl, LV_ALIGN_TOP_LEFT, 8, 36);
 
+    // Overall verdict badge
     lv_obj_t *verdict = lv_label_create(scr);
-    lv_label_set_text(verdict, overall_pass ? "  OVERALL: PASS  " : "  OVERALL: FAIL  ");
+    lv_label_set_text(verdict,
+        overall_pass ? LV_SYMBOL_OK "  OVERALL: PASS" : LV_SYMBOL_CLOSE "  OVERALL: FAIL");
     lv_obj_set_style_text_color(verdict,
         lv_color_hex(overall_pass ? COLOR_PASS : COLOR_FAIL), 0);
-    lv_obj_align(verdict, LV_ALIGN_BOTTOM_MID, 0, -30);
+    lv_obj_set_style_text_font(verdict, &lv_font_montserrat_16, 0);
+    lv_obj_align(verdict, LV_ALIGN_BOTTOM_MID, 0, -34);
 
     lv_obj_t *hint = lv_label_create(scr);
-    lv_label_set_text(hint, "< tap to restart >");
+    lv_label_set_text(hint, "tap anywhere to restart");
     lv_obj_set_style_text_color(hint, lv_color_hex(COLOR_SKIP), 0);
+    lv_obj_set_style_text_font(hint, &lv_font_unscii_8, 0);
     lv_obj_align(hint, LV_ALIGN_BOTTOM_MID, 0, -10);
 
     lv_scr_load(scr);
@@ -259,30 +309,42 @@ FactoryTest::Result FactoryTest::_test_display()
 
     Display *disp = _board.get_display();
     if (!disp) {
-        _update_screen("No display driver", Result::FAIL);
-        vTaskDelay(pdMS_TO_TICKS(2000));
-        return Result::FAIL;
+        _update_screen("No display driver!", Result::FAIL);
+        return _wait_verdict() ? Result::PASS : Result::FAIL;
     }
 
     for (auto &s : steps) {
-        char msg[48];
-        snprintf(msg, sizeof(msg), "Filling: %s", s.name);
-        _update_screen(msg, Result::SKIP);
-
-        // Fill via LVGL (let LVGL draw a solid-color rectangle)
+        // Full-screen solid-colour overlay for visual check
+        lv_obj_t *overlay = nullptr;
         if (LVGL_LOCK(200)) {
-            lv_obj_t *scr = lv_scr_act();
-            lv_obj_set_style_bg_color(scr, lv_color_hex(s.color), 0);
-            lv_obj_set_style_bg_opa(scr, LV_OPA_COVER, 0);
-            lv_obj_invalidate(scr);
+            overlay = lv_obj_create(lv_scr_act());
+            lv_obj_set_size(overlay, SCREEN_WIDTH, SCREEN_HEIGHT);
+            lv_obj_set_pos(overlay, 0, 0);
+            lv_obj_set_style_bg_color(overlay, lv_color_hex(s.color), 0);
+            lv_obj_set_style_bg_opa(overlay, LV_OPA_COVER, 0);
+            lv_obj_set_style_border_width(overlay, 0, 0);
+            lv_obj_set_style_radius(overlay, 0, 0);
+            lv_obj_set_style_pad_all(overlay, 0, 0);
+            // Small colour-name label in bottom-right corner
+            uint32_t txt_col = (s.color <= 0x0000FF || s.color == 0x000000) ? 0xFFFFFF : 0x000000;
+            lv_obj_t *name_lbl = lv_label_create(overlay);
+            lv_label_set_text(name_lbl, s.name);
+            lv_obj_set_style_text_color(name_lbl, lv_color_hex(txt_col), 0);
+            lv_obj_set_style_text_font(name_lbl, &lv_font_montserrat_16, 0);
+            lv_obj_align(name_lbl, LV_ALIGN_BOTTOM_RIGHT, -8, -6);
             LVGL_UNLOCK();
         }
         vTaskDelay(pdMS_TO_TICKS(1000));
+        if (overlay && LVGL_LOCK(200)) {
+            lv_obj_del(overlay);
+            LVGL_UNLOCK();
+        }
+        vTaskDelay(pdMS_TO_TICKS(100));
     }
 
-    _show_screen(1, "Display", "All colors rendered", Result::PASS);
-    vTaskDelay(pdMS_TO_TICKS(1000));
-    return Result::PASS;
+    _update_screen("Red / Green / Blue\nWhite / Black shown.\n\n"
+                   "Did all 5 colors look\ncorrect?", Result::SKIP);
+    return _wait_verdict() ? Result::PASS : Result::FAIL;
 }
 
 FactoryTest::Result FactoryTest::_test_touch()
@@ -320,15 +382,13 @@ FactoryTest::Result FactoryTest::_test_touch()
     }
 
     if (taps >= 3) {
-        _update_screen("3 taps registered", Result::PASS);
-        vTaskDelay(pdMS_TO_TICKS(1000));
-        return Result::PASS;
+        _update_screen("Taps detected  : 3/3\nResult         : OK", Result::PASS);
     } else {
-        snprintf(msg, sizeof(msg), "Only %d/3 taps (timeout)", taps);
+        snprintf(msg, sizeof(msg),
+                 "Taps detected  : %d/3\nResult         : TIMEOUT", taps);
         _update_screen(msg, Result::FAIL);
-        vTaskDelay(pdMS_TO_TICKS(1500));
-        return Result::FAIL;
     }
+    return _wait_verdict() ? Result::PASS : Result::FAIL;
 }
 
 FactoryTest::Result FactoryTest::_test_sdcard()
@@ -337,50 +397,42 @@ FactoryTest::Result FactoryTest::_test_sdcard()
 
     SD_MMC.setPins(SD_CLK_PIN, SD_CMD_PIN, SD_D0_PIN);
     if (!SD_MMC.begin("/sdcard", true)) {   // true = 1-bit mode
-        _update_screen("Mount failed\n(SD inserted?)", Result::FAIL);
-        vTaskDelay(pdMS_TO_TICKS(2000));
-        return Result::FAIL;
+        _update_screen("Mount           FAIL\n(SD inserted?)", Result::FAIL);
+        return _wait_verdict() ? Result::PASS : Result::FAIL;
     }
 
     const char *test_path = "/sdcard/factory_test.tmp";
     const char *test_data = "NMDisplay28-FactoryTest-OK";
 
-    // Write
-    _update_screen("Mounted\nWriting...", Result::SKIP);
+    _update_screen("Mount           OK\nWrite           ...", Result::SKIP);
     File f = SD_MMC.open(test_path, FILE_WRITE);
     if (!f) {
-        _update_screen("Write open failed", Result::FAIL);
+        _update_screen("Mount           OK\nWrite open      FAIL", Result::FAIL);
         SD_MMC.end();
-        vTaskDelay(pdMS_TO_TICKS(2000));
-        return Result::FAIL;
+        return _wait_verdict() ? Result::PASS : Result::FAIL;
     }
     f.print(test_data);
     f.close();
 
-    // Read back
-    _update_screen("Written\nReading...", Result::SKIP);
+    _update_screen("Mount           OK\nWrite           OK\nRead            ...", Result::SKIP);
     f = SD_MMC.open(test_path, FILE_READ);
     if (!f) {
-        _update_screen("Read open failed", Result::FAIL);
+        _update_screen("Mount           OK\nWrite           OK\nRead open       FAIL", Result::FAIL);
         SD_MMC.end();
-        vTaskDelay(pdMS_TO_TICKS(2000));
-        return Result::FAIL;
+        return _wait_verdict() ? Result::PASS : Result::FAIL;
     }
     char read_buf[64] = {};
     f.readBytes(read_buf, sizeof(read_buf) - 1);
     f.close();
-    SD_MMC.remove(test_path);   // clean up
+    SD_MMC.remove(test_path);
     SD_MMC.end();
 
-    if (strcmp(read_buf, test_data) == 0) {
-        _update_screen("Write OK\nRead OK\nContent matches", Result::PASS);
-        vTaskDelay(pdMS_TO_TICKS(1500));
-        return Result::PASS;
-    } else {
-        _update_screen("Content mismatch!", Result::FAIL);
-        vTaskDelay(pdMS_TO_TICKS(2000));
-        return Result::FAIL;
-    }
+    bool match = (strcmp(read_buf, test_data) == 0);
+    _update_screen(
+        match ? "Mount           OK\nWrite           OK\nRead            OK\nContent match   OK"
+              : "Mount           OK\nWrite           OK\nRead            OK\nContent match   FAIL",
+        match ? Result::PASS : Result::FAIL);
+    return _wait_verdict() ? Result::PASS : Result::FAIL;
 }
 
 FactoryTest::Result FactoryTest::_test_wifi()
@@ -395,22 +447,21 @@ FactoryTest::Result FactoryTest::_test_wifi()
     WiFi.mode(WIFI_OFF);
 
     if (n <= 0) {
-        _update_screen("No networks found", Result::FAIL);
-        vTaskDelay(pdMS_TO_TICKS(2000));
-        return Result::FAIL;
+        _update_screen("Scan result     FAIL\nNo APs found", Result::FAIL);
+        return _wait_verdict() ? Result::PASS : Result::FAIL;
     }
 
-    char msg[128];
-    int  written = snprintf(msg, sizeof(msg), "Found %d APs:\n", n);
-    for (int i = 0; i < n && i < 4 && written < (int)sizeof(msg) - 30; i++) {
+    char msg[192];
+    int  written = snprintf(msg, sizeof(msg), "Scan result     OK\nFound %-3d APs:\n", n);
+    for (int i = 0; i < n && i < 5 && written < (int)sizeof(msg) - 36; i++) {
         written += snprintf(msg + written, sizeof(msg) - written,
-                            "%s (%d dBm)\n", WiFi.SSID(i).c_str(), WiFi.RSSI(i));
+                            "  %-16.16s %ddBm\n",
+                            WiFi.SSID(i).c_str(), WiFi.RSSI(i));
     }
     WiFi.scanDelete();
 
     _update_screen(msg, Result::PASS);
-    vTaskDelay(pdMS_TO_TICKS(2500));
-    return Result::PASS;
+    return _wait_verdict() ? Result::PASS : Result::FAIL;
 }
 
 // Helper: probe I2C address, return true if ACK received.
@@ -426,9 +477,8 @@ FactoryTest::Result FactoryTest::_test_imu()
     _show_screen(5, "IMU (QMI8658)", "Probing I2C...", Result::SKIP);
 
     if (!i2c_probe(QMI8658_ADDR)) {
-        _update_screen("No ACK at 0x6B\nor 0x6A", Result::FAIL);
-        vTaskDelay(pdMS_TO_TICKS(2000));
-        return Result::FAIL;
+        _update_screen("I2C probe 0x6B  FAIL\nNo ACK", Result::FAIL);
+        return _wait_verdict() ? Result::PASS : Result::FAIL;
     }
 
     // Read WHO_AM_I (register 0x00) — QMI8658A returns 0x05.
@@ -437,13 +487,16 @@ FactoryTest::Result FactoryTest::_test_imu()
     Wire.endTransmission(false);
     Wire.requestFrom(QMI8658_ADDR, (uint8_t)1);
     uint8_t who = Wire.available() ? Wire.read() : 0xFF;
+    bool ok = (who == 0x05);
 
-    char msg[64];
-    snprintf(msg, sizeof(msg), "ACK at 0x%02X\nWHO_AM_I = 0x%02X%s",
-             QMI8658_ADDR, who, (who == 0x05) ? " (OK)" : " (unexpected)");
-    _update_screen(msg, (who == 0x05) ? Result::PASS : Result::FAIL);
-    vTaskDelay(pdMS_TO_TICKS(2000));
-    return (who == 0x05) ? Result::PASS : Result::FAIL;
+    char msg[96];
+    snprintf(msg, sizeof(msg),
+             "I2C probe 0x6B  OK\n"
+             "WHO_AM_I  0x%02X  %s\n"
+             "Expected  0x05  %s",
+             who, ok ? "OK" : "!!", ok ? "match" : "mismatch");
+    _update_screen(msg, ok ? Result::PASS : Result::FAIL);
+    return _wait_verdict() ? Result::PASS : Result::FAIL;
 }
 
 FactoryTest::Result FactoryTest::_test_pmu()
@@ -451,9 +504,8 @@ FactoryTest::Result FactoryTest::_test_pmu()
     _show_screen(6, "PMU (AXP2101)", "Probing I2C...", Result::SKIP);
 
     if (!i2c_probe(AXP2101_I2C_ADDR)) {
-        _update_screen("No ACK at 0x34", Result::FAIL);
-        vTaskDelay(pdMS_TO_TICKS(2000));
-        return Result::FAIL;
+        _update_screen("I2C probe 0x34  FAIL\nNo ACK", Result::FAIL);
+        return _wait_verdict() ? Result::PASS : Result::FAIL;
     }
 
     // Read chip ID register (0x03) — AXP2101 returns 0x4A.
@@ -462,13 +514,16 @@ FactoryTest::Result FactoryTest::_test_pmu()
     Wire.endTransmission(false);
     Wire.requestFrom(AXP2101_I2C_ADDR, (uint8_t)1);
     uint8_t chip_id = Wire.available() ? Wire.read() : 0xFF;
+    bool ok = (chip_id == 0x4A);
 
-    char msg[64];
-    snprintf(msg, sizeof(msg), "ACK at 0x%02X\nChip ID = 0x%02X%s",
-             AXP2101_I2C_ADDR, chip_id, (chip_id == 0x4A) ? " (OK)" : " (unexpected)");
-    _update_screen(msg, (chip_id == 0x4A) ? Result::PASS : Result::FAIL);
-    vTaskDelay(pdMS_TO_TICKS(2000));
-    return (chip_id == 0x4A) ? Result::PASS : Result::FAIL;
+    char msg[96];
+    snprintf(msg, sizeof(msg),
+             "I2C probe 0x34  OK\n"
+             "Chip ID   0x%02X  %s\n"
+             "Expected  0x4A  %s",
+             chip_id, ok ? "OK" : "!!", ok ? "match" : "mismatch");
+    _update_screen(msg, ok ? Result::PASS : Result::FAIL);
+    return _wait_verdict() ? Result::PASS : Result::FAIL;
 }
 
 FactoryTest::Result FactoryTest::_test_rtc()
@@ -478,9 +533,8 @@ FactoryTest::Result FactoryTest::_test_rtc()
     _show_screen(7, "RTC (PCF85063)", "Probing I2C...", Result::SKIP);
 
     if (!i2c_probe(PCF85063_ADDR)) {
-        _update_screen("No ACK at 0x51", Result::FAIL);
-        vTaskDelay(pdMS_TO_TICKS(2000));
-        return Result::FAIL;
+        _update_screen("I2C probe 0x51  FAIL\nNo ACK", Result::FAIL);
+        return _wait_verdict() ? Result::PASS : Result::FAIL;
     }
 
     // Read seconds register (0x04) twice 1s apart; it should increment.
@@ -494,82 +548,50 @@ FactoryTest::Result FactoryTest::_test_rtc()
     };
 
     uint8_t s1 = read_seconds();
-    _update_screen("Reading seconds...", Result::SKIP);
+    _update_screen("I2C probe 0x51  OK\nReading seconds...", Result::SKIP);
     vTaskDelay(pdMS_TO_TICKS(1100));
     uint8_t s2 = read_seconds();
 
     bool ticking = (s2 != s1);
-    char msg[64];
-    snprintf(msg, sizeof(msg), "sec[0]=%u  sec[1]=%u\n%s",
-             s1, s2, ticking ? "Counter incremented" : "Counter NOT ticking!");
+    char msg[96];
+    snprintf(msg, sizeof(msg),
+             "I2C probe 0x51  OK\n"
+             "sec[0]    %-3u\n"
+             "sec[1]    %-3u\n"
+             "Ticking   %s",
+             s1, s2, ticking ? "YES  OK" : "NO   FAIL");
     _update_screen(msg, ticking ? Result::PASS : Result::FAIL);
-    vTaskDelay(pdMS_TO_TICKS(1500));
-    return ticking ? Result::PASS : Result::FAIL;
+    return _wait_verdict() ? Result::PASS : Result::FAIL;
 }
 
 FactoryTest::Result FactoryTest::_test_camera()
 {
-    _show_screen(8, "Camera", "Initializing...", Result::SKIP);
-
-    // Use esp_camera directly (available in Arduino ESP32 framework).
-    camera_config_t cfg = {};
-    cfg.ledc_channel = (ledc_channel_t)CAM_LEDC_CH;
-    cfg.ledc_timer   = (ledc_timer_t)CAM_LEDC_TIMER;
-    cfg.pin_d0  = CAM_D0_PIN;  cfg.pin_d1 = CAM_D1_PIN;
-    cfg.pin_d2  = CAM_D2_PIN;  cfg.pin_d3 = CAM_D3_PIN;
-    cfg.pin_d4  = CAM_D4_PIN;  cfg.pin_d5 = CAM_D5_PIN;
-    cfg.pin_d6  = CAM_D6_PIN;  cfg.pin_d7 = CAM_D7_PIN;
-    cfg.pin_xclk  = CAM_XCLK_PIN;
-    cfg.pin_pclk  = CAM_PCLK_PIN;
-    cfg.pin_vsync = CAM_VSYNC_PIN;
-    cfg.pin_href  = CAM_HREF_PIN;
-    cfg.pin_pwdn  = CAM_PWDN_PIN;
-    cfg.pin_reset = CAM_RESET_PIN;
-    cfg.xclk_freq_hz = 20000000;
-    cfg.pixel_format = PIXFORMAT_JPEG;
-    cfg.frame_size   = FRAMESIZE_QVGA;   // 320×240
-    cfg.jpeg_quality = 12;
-    cfg.fb_count     = 1;
-    cfg.fb_location  = CAMERA_FB_IN_PSRAM;
-    cfg.grab_mode    = CAMERA_GRAB_WHEN_EMPTY;
-
-    esp_err_t err = esp_camera_init(&cfg);
-    if (err != ESP_OK) {
-        char msg[64];
-        snprintf(msg, sizeof(msg), "Init failed: 0x%X", err);
-        _update_screen(msg, Result::FAIL);
-        vTaskDelay(pdMS_TO_TICKS(2000));
-        return Result::FAIL;
-    }
-
-    _update_screen("Capturing frame...", Result::SKIP);
-    camera_fb_t *fb = esp_camera_fb_get();
-    if (!fb || fb->len == 0) {
-        _update_screen("Frame capture failed", Result::FAIL);
-        esp_camera_deinit();
-        vTaskDelay(pdMS_TO_TICKS(2000));
-        return Result::FAIL;
-    }
-
-    char msg[80];
-    snprintf(msg, sizeof(msg), "Frame OK\n%d x %d  %u bytes",
-             fb->width, fb->height, fb->len);
-    esp_camera_fb_return(fb);
-    esp_camera_deinit();
-
-    _update_screen(msg, Result::PASS);
-    vTaskDelay(pdMS_TO_TICKS(2000));
-    return Result::PASS;
+    // TODO: Camera hardware test not yet implemented.
+    // Requires a physical OV2640 (or compatible) module connected to CAM_* pins.
+    // TODO: Verify CAM_LEDC_TIMER / CAM_LEDC_CH don't conflict with backlight
+    //       LEDC before enabling esp_camera_init() here.
+    // TODO: Add frame-quality check: verify captured JPEG size > threshold
+    //       and that the frame is not an all-black "dark frame".
+    _show_screen(8, "Camera",
+        "TODO: Camera test\n"
+        "not implemented yet.\n"
+        "\n"
+        "Requires OV2640 module\n"
+        "on CAM_* pins.\n"
+        "\n"
+        "Press Ok to SKIP.",
+        Result::SKIP);
+    _wait_verdict();
+    return Result::SKIP;   // always SKIP until TODO resolved
 }
 
 FactoryTest::Result FactoryTest::_test_audio()
 {
-    _show_screen(9, "Audio (ES8311)", "Probing I2C...", Result::SKIP);
+    _show_screen(9, "Audio (ES8311)", "Probing I2C 0x18...", Result::SKIP);
 
     if (!i2c_probe(ES8311_I2C_ADDR)) {
-        _update_screen("No ACK at 0x18\n(ES8311 not found)", Result::FAIL);
-        vTaskDelay(pdMS_TO_TICKS(2000));
-        return Result::FAIL;
+        _update_screen("I2C probe 0x18  FAIL\nES8311 not found", Result::FAIL);
+        return _wait_verdict() ? Result::PASS : Result::FAIL;
     }
 
     // Read chip ID registers (0xFD / 0xFE) — ES8311 returns 0x83 / 0x11.
@@ -579,12 +601,22 @@ FactoryTest::Result FactoryTest::_test_audio()
     Wire.requestFrom(ES8311_I2C_ADDR, (uint8_t)2);
     uint8_t id0 = Wire.available() ? Wire.read() : 0xFF;
     uint8_t id1 = Wire.available() ? Wire.read() : 0xFF;
+    bool i2c_ok = (id0 == 0x83 && id1 == 0x11);
 
-    bool ok = (id0 == 0x83 && id1 == 0x11);
-    char msg[64];
-    snprintf(msg, sizeof(msg), "ACK at 0x%02X\nChipID = 0x%02X%02X%s",
-             ES8311_I2C_ADDR, id0, id1, ok ? " (OK)" : " (unexpected)");
-    _update_screen(msg, ok ? Result::PASS : Result::FAIL);
-    vTaskDelay(pdMS_TO_TICKS(2000));
-    return ok ? Result::PASS : Result::FAIL;
+    // TODO: Actual audio I/O test not yet implemented.
+    // TODO: Add I2S init + tone playback via ES8311 DAC and verify
+    //       output level with an analog measurement or loopback.
+    // TODO: Add DMIC / line-in recording test via ES8311 ADC.
+    char msg[160];
+    snprintf(msg, sizeof(msg),
+             "I2C probe 0x18  OK\n"
+             "ChipID[FD] 0x%02X  %s\n"
+             "ChipID[FE] 0x%02X  %s\n"
+             "\n"
+             "TODO: I2S playback test\n"
+             "(I2C probe only)",
+             id0, (id0 == 0x83) ? "OK" : "!!",
+             id1, (id1 == 0x11) ? "OK" : "!!");
+    _update_screen(msg, i2c_ok ? Result::PASS : Result::FAIL);
+    return _wait_verdict() ? Result::PASS : Result::FAIL;
 }

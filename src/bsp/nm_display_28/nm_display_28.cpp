@@ -171,21 +171,20 @@ public:
             .init_cmds      = nullptr,
             .init_cmds_size = 0,
             // FT6336 raw range matches physical LCD pixels (240×320 portrait).
-            // Mapping is applied below; rotation transform is done manually in
-            // lvgl_port touch_read_cb based on the operating rotation.
             .x_max = 240,
             .y_max = 320,
-            // rotation_map: all transforms are identity here — the lvgl_port
-            // flush callback applies the 270° coordinate transform directly.
+            // 90° landscape: FT6336 portrait-X maps to display-X but runs in
+            // the opposite direction → mirror_x = true.
             .rotation_map = {
-                [0] = { false, false, false },
-                [1] = { false, false, false },
-                [2] = { false, false, false },
-                [3] = { false, false, false },
+                [0] = { false, false, false },  // 0°
+                [1] = { false, true,  false },  // 90°  ← X mirrored
+                [2] = { false, false, false },  // 180°
+                [3] = { false, false, false },  // 270°
             },
         });
         tp->reset();
         tp->init();
+        tp->set_rotation(DISPLAY_ROTATION);  // apply transform for operating rotation
 
         _touch = tp;
         return _touch;
