@@ -179,6 +179,7 @@ bool FactoryTest::_wait_verdict()
     lv_obj_add_event_cb(ok_btn, _on_ok_btn, LV_EVENT_CLICKED, this);
     lv_obj_t *ok_lbl = lv_label_create(ok_btn);
     lv_label_set_text(ok_lbl, LV_SYMBOL_OK "  Ok");
+    lv_obj_set_style_text_font(ok_lbl, &lv_font_montserrat_16, 0);
     lv_obj_set_style_text_color(ok_lbl, lv_color_hex(0xFFFFFF), 0);
     lv_obj_center(ok_lbl);
 
@@ -193,6 +194,7 @@ bool FactoryTest::_wait_verdict()
     lv_obj_add_event_cb(fail_btn, _on_fail_btn, LV_EVENT_CLICKED, this);
     lv_obj_t *fail_lbl = lv_label_create(fail_btn);
     lv_label_set_text(fail_lbl, LV_SYMBOL_CLOSE "  Failed");
+    lv_obj_set_style_text_font(fail_lbl, &lv_font_montserrat_16, 0);
     lv_obj_set_style_text_color(fail_lbl, lv_color_hex(0xFFFFFF), 0);
     lv_obj_center(fail_lbl);
 
@@ -203,6 +205,32 @@ bool FactoryTest::_wait_verdict()
         vTaskDelay(pdMS_TO_TICKS(50));
     }
     return (_verdict == 1);
+}
+
+bool FactoryTest::_auto_or_verdict(bool auto_passed)
+{
+    if (!auto_passed) return _wait_verdict();
+
+    // Auto PASS: show a single full-width green "PASS — Continue" button.
+    _verdict = -1;
+    if (LVGL_LOCK(500)) {
+        lv_obj_t *btn = lv_btn_create(lv_scr_act());
+        lv_obj_set_size(btn, 304, 44);
+        lv_obj_align(btn, LV_ALIGN_BOTTOM_MID, 0, -6);
+        lv_obj_set_style_bg_color(btn, lv_color_hex(COLOR_PASS), 0);
+        lv_obj_set_style_bg_color(btn, lv_color_hex(0x27AE60), LV_STATE_PRESSED);
+        lv_obj_set_style_border_width(btn, 0, 0);
+        lv_obj_set_style_radius(btn, 6, 0);
+        lv_obj_add_event_cb(btn, _on_ok_btn, LV_EVENT_CLICKED, this);
+        lv_obj_t *lbl = lv_label_create(btn);
+        lv_label_set_text(lbl, LV_SYMBOL_OK "  PASS >> Continue");
+        lv_obj_set_style_text_font(lbl, &lv_font_montserrat_16, 0);
+        lv_obj_set_style_text_color(lbl, lv_color_hex(0xFFFFFF), 0);
+        lv_obj_center(lbl);
+        LVGL_UNLOCK();
+    }
+    while (_verdict < 0) vTaskDelay(pdMS_TO_TICKS(50));
+    return true;   // always PASS
 }
 
 bool FactoryTest::_wait_touch(uint32_t wait_ms)
@@ -429,6 +457,7 @@ FactoryTest::Result FactoryTest::_test_touch()
     lv_obj_add_event_cb(ok_btn, _on_ok_btn, LV_EVENT_CLICKED, this);
     lv_obj_t *ok_lbl = lv_label_create(ok_btn);
     lv_label_set_text(ok_lbl, LV_SYMBOL_OK "  Ok");
+    lv_obj_set_style_text_font(ok_lbl, &lv_font_montserrat_16, 0);
     lv_obj_set_style_text_color(ok_lbl, lv_color_hex(0xFFFFFF), 0);
     lv_obj_center(ok_lbl);
 
@@ -442,6 +471,7 @@ FactoryTest::Result FactoryTest::_test_touch()
     lv_obj_add_event_cb(fail_btn, _on_fail_btn, LV_EVENT_CLICKED, this);
     lv_obj_t *fail_lbl = lv_label_create(fail_btn);
     lv_label_set_text(fail_lbl, LV_SYMBOL_CLOSE "  Failed");
+    lv_obj_set_style_text_font(fail_lbl, &lv_font_montserrat_16, 0);
     lv_obj_set_style_text_color(fail_lbl, lv_color_hex(0xFFFFFF), 0);
     lv_obj_center(fail_lbl);
 
@@ -534,7 +564,7 @@ FactoryTest::Result FactoryTest::_test_sdcard()
     SD_MMC.setPins(SD_CLK_PIN, SD_CMD_PIN, SD_D0_PIN);
     if (!SD_MMC.begin("/sdcard", true)) {   // true = 1-bit mode
         _update_screen("Mount        #E74C3C FAIL #\n(SD inserted?)", Result::FAIL);
-        return _wait_verdict() ? Result::PASS : Result::FAIL;
+        return _auto_or_verdict(false) ? Result::PASS : Result::FAIL;
     }
 
     // Card info
@@ -558,7 +588,7 @@ FactoryTest::Result FactoryTest::_test_sdcard()
     _update_screen(body_buf, Result::SKIP);
 
     // ── 512 KiB write benchmark ───────────────────────────────────────────────
-    const char *test_path = "/sdcard/factory_test.tmp";
+    const char *test_path = "/factory_test.tmp";   // path relative to SD_MMC mount point
     constexpr uint32_t BLOCK_SZ    = 4096u;
     constexpr uint32_t BENCH_BYTES = 512u * 1024u;
 
@@ -573,7 +603,7 @@ FactoryTest::Result FactoryTest::_test_sdcard()
                  "Mount", l_type, l_cap, "Write open");
         _update_screen(body_buf, Result::FAIL);
         SD_MMC.end();
-        return _wait_verdict() ? Result::PASS : Result::FAIL;
+        return _auto_or_verdict(false) ? Result::PASS : Result::FAIL;
     }
 
     uint32_t written = 0;
@@ -636,7 +666,7 @@ FactoryTest::Result FactoryTest::_test_sdcard()
 
     bool allOk = writeOk && readOk && verifyOk;
     _update_screen(body_buf, allOk ? Result::PASS : Result::FAIL);
-    return _wait_verdict() ? Result::PASS : Result::FAIL;
+    return _auto_or_verdict(allOk) ? Result::PASS : Result::FAIL;
 }
 
 FactoryTest::Result FactoryTest::_test_wifi()
@@ -656,7 +686,7 @@ FactoryTest::Result FactoryTest::_test_wifi()
 
     if (n <= 0) {
         _update_screen("Scan         #E74C3C FAIL #\nNo APs found", Result::FAIL);
-        return _wait_verdict() ? Result::PASS : Result::FAIL;
+        return _auto_or_verdict(false) ? Result::PASS : Result::FAIL;
     }
 
     char msg[384];
@@ -668,15 +698,23 @@ FactoryTest::Result FactoryTest::_test_wifi()
         // Skip APs with empty SSID (hidden networks without a broadcast name)
         String ssid = WiFi.SSID(i);
         if (ssid.length() == 0) continue;
+        int rssi = WiFi.RSSI(i);
+        // RSSI colour: >= -60 excellent(green), >= -70 good(yellow),
+        //              >= -80 fair(orange), < -80 poor(red)
+        const char *rssiCol;
+        if      (rssi >= -60) rssiCol = "2ECC71";
+        else if (rssi >= -70) rssiCol = "F1C40F";
+        else if (rssi >= -80) rssiCol = "E67E22";
+        else                  rssiCol = "E74C3C";
         written += snprintf(msg + written, sizeof(msg) - written,
-                            "#2ECC71 %-18.18s %4ddBm#\n",
-                            ssid.c_str(), WiFi.RSSI(i));
+                            "%-16.16s #%s %4ddBm#\n",
+                            ssid.c_str(), rssiCol, rssi);
         shown++;
     }
     WiFi.scanDelete();
 
     _update_screen(msg, Result::PASS);
-    return _wait_verdict() ? Result::PASS : Result::FAIL;
+    return _auto_or_verdict(shown > 0) ? Result::PASS : Result::FAIL;
 }
 
 // Helper: probe I2C address, return true if ACK received.
@@ -693,7 +731,7 @@ FactoryTest::Result FactoryTest::_test_imu()
 
     if (!i2c_probe(QMI8658_ADDR)) {
         _update_screen("I2C 0x6B     #E74C3C FAIL #\nNo ACK", Result::FAIL);
-        return _wait_verdict() ? Result::PASS : Result::FAIL;
+        return _auto_or_verdict(false) ? Result::PASS : Result::FAIL;
     }
 
     // Read WHO_AM_I (register 0x00) — QMI8658A returns 0x05.
@@ -712,7 +750,7 @@ FactoryTest::Result FactoryTest::_test_imu()
              ok ? "2ECC71" : "E74C3C", ok ? "OK" : "FAIL");
     snprintf(msg, sizeof(msg), "%s\n%s\n%s\n%s", l1, l2, l3, l4);
     _update_screen(msg, ok ? Result::PASS : Result::FAIL);
-    return _wait_verdict() ? Result::PASS : Result::FAIL;
+    return _auto_or_verdict(ok) ? Result::PASS : Result::FAIL;
 }
 
 FactoryTest::Result FactoryTest::_test_pmu()
@@ -721,7 +759,7 @@ FactoryTest::Result FactoryTest::_test_pmu()
 
     if (!i2c_probe(AXP2101_I2C_ADDR)) {
         _update_screen("I2C 0x34     #E74C3C FAIL #\nNo ACK", Result::FAIL);
-        return _wait_verdict() ? Result::PASS : Result::FAIL;
+        return _auto_or_verdict(false) ? Result::PASS : Result::FAIL;
     }
 
     // Read chip ID register (0x03) — AXP2101 returns 0x4A.
@@ -740,7 +778,7 @@ FactoryTest::Result FactoryTest::_test_pmu()
              ok ? "2ECC71" : "E74C3C", ok ? "OK" : "FAIL");
     snprintf(msg, sizeof(msg), "%s\n%s\n%s\n%s", l1, l2, l3, l4);
     _update_screen(msg, ok ? Result::PASS : Result::FAIL);
-    return _wait_verdict() ? Result::PASS : Result::FAIL;
+    return _auto_or_verdict(ok) ? Result::PASS : Result::FAIL;
 }
 
 FactoryTest::Result FactoryTest::_test_rtc()
@@ -751,7 +789,7 @@ FactoryTest::Result FactoryTest::_test_rtc()
 
     if (!i2c_probe(PCF85063_ADDR)) {
         _update_screen("I2C 0x51     #E74C3C FAIL #\nNo ACK", Result::FAIL);
-        return _wait_verdict() ? Result::PASS : Result::FAIL;
+        return _auto_or_verdict(false) ? Result::PASS : Result::FAIL;
     }
 
     // Read seconds register (0x04) twice 1s apart; it should increment.
@@ -779,7 +817,7 @@ FactoryTest::Result FactoryTest::_test_rtc()
              ticking ? "YES" : "NO");
     snprintf(msg, sizeof(msg), "%s\n%s\n%s\n%s", l1, l2, l3, l4);
     _update_screen(msg, ticking ? Result::PASS : Result::FAIL);
-    return _wait_verdict() ? Result::PASS : Result::FAIL;
+    return _auto_or_verdict(ticking) ? Result::PASS : Result::FAIL;
 }
 
 FactoryTest::Result FactoryTest::_test_camera()
@@ -809,7 +847,7 @@ FactoryTest::Result FactoryTest::_test_audio()
 
     if (!i2c_probe(ES8311_I2C_ADDR)) {
         _update_screen("I2C 0x18     #E74C3C FAIL #\nES8311 not found", Result::FAIL);
-        return _wait_verdict() ? Result::PASS : Result::FAIL;
+        return _auto_or_verdict(false) ? Result::PASS : Result::FAIL;
     }
 
     // Read chip ID registers (0xFD / 0xFE) — ES8311 returns 0x83 / 0x11.
@@ -830,5 +868,5 @@ FactoryTest::Result FactoryTest::_test_audio()
     snprintf(l4, sizeof(l4), "%-13s#7F8C8D TODO #",   "I2S test");
     snprintf(msg, sizeof(msg), "%s\n%s\n%s\n%s", l1, l2, l3, l4);
     _update_screen(msg, i2c_ok ? Result::PASS : Result::FAIL);
-    return _wait_verdict() ? Result::PASS : Result::FAIL;
+    return _auto_or_verdict(i2c_ok) ? Result::PASS : Result::FAIL;
 }

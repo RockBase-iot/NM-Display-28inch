@@ -63,6 +63,10 @@ private:
     // the user presses one.  Returns true = Ok (PASS), false = Failed (FAIL).
     bool _wait_verdict();
 
+    // If auto_passed: show a single full-width "PASS — Continue" button and
+    // always return true (PASS).  Otherwise fall back to _wait_verdict().
+    bool _auto_or_verdict(bool auto_passed);
+
     // Show the final summary and block until the user taps.
     void _show_summary(const char * const names[], const Result results[], int count);
 
