@@ -59,11 +59,17 @@ private:
     // Returns true if a tap was detected, false if timed out.
     bool _wait_touch(uint32_t wait_ms);
 
+    // Add verdict button(s) to the current screen WITHOUT blocking.
+    // If auto_passed: single full-width green "PASS >> Continue" button.
+    // Otherwise: green Ok (left) + red Failed (right).
+    // Resets _verdict to -1 before adding buttons.
+    void _add_verdict_buttons(bool auto_passed);
+
     // Add Ok / Failed LVGL buttons to the current screen and block until
     // the user presses one.  Returns true = Ok (PASS), false = Failed (FAIL).
     bool _wait_verdict();
 
-    // If auto_passed: show a single full-width "PASS — Continue" button and
+    // If auto_passed: show a single full-width "PASS >> Continue" button and
     // always return true (PASS).  Otherwise fall back to _wait_verdict().
     bool _auto_or_verdict(bool auto_passed);
 
@@ -83,5 +89,6 @@ private:
 
     // Cached LVGL widgets from the current test screen (updated by _update_screen).
     void        *_lv_body_label  = nullptr;   // lv_obj_t* cast to void*
+    void        *_lv_body_panel  = nullptr;   // scrollable container for body_label
     void        *_lv_badge_label = nullptr;   // unused; kept for ABI compat
 };

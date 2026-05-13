@@ -132,20 +132,39 @@ void FactoryTest::_show_screen(uint8_t index, const char *name,
     lv_obj_set_style_text_font(title_lbl, &lv_font_montserrat_16, 0);
     lv_obj_center(title_lbl);
 
-    // ── Body text (monospace, aligned output) ──────────────────────────────────
-    lv_obj_t *body_lbl = lv_label_create(scr);
+    // ── Scrollable body panel (title=40px, buttons=54px → 146px tall) ──────────
+    lv_obj_t *panel = lv_obj_create(scr);
+    lv_obj_set_size(panel, SCREEN_WIDTH, SCREEN_HEIGHT - 40 - 54);
+    lv_obj_set_pos(panel, 0, 40);
+    lv_obj_set_style_bg_color(panel, lv_color_hex(COLOR_BG), 0);
+    lv_obj_set_style_bg_opa(panel, LV_OPA_COVER, 0);
+    lv_obj_set_style_border_width(panel, 0, 0);
+    lv_obj_set_style_radius(panel, 0, 0);
+    lv_obj_set_style_pad_left(panel, 8, 0);
+    lv_obj_set_style_pad_right(panel, 8, 0);
+    lv_obj_set_style_pad_top(panel, 4, 0);
+    lv_obj_set_style_pad_bottom(panel, 4, 0);
+    lv_obj_add_flag(panel, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_set_scroll_dir(panel, LV_DIR_VER);
+    lv_obj_set_scrollbar_mode(panel, LV_SCROLLBAR_MODE_AUTO);
+    lv_obj_set_style_bg_color(panel, lv_color_hex(COLOR_SUBTEXT), LV_PART_SCROLLBAR);
+    lv_obj_set_style_bg_opa(panel, LV_OPA_COVER, LV_PART_SCROLLBAR);
+    lv_obj_set_style_width(panel, 3, LV_PART_SCROLLBAR);
+    lv_obj_set_style_radius(panel, 2, LV_PART_SCROLLBAR);
+
+    lv_obj_t *body_lbl = lv_label_create(panel);
     lv_label_set_text(body_lbl, body);
     lv_obj_set_style_text_color(body_lbl, lv_color_hex(COLOR_SUBTEXT), 0);
     lv_obj_set_style_text_font(body_lbl, &Inconsolata_16, 0);
     lv_obj_set_style_text_line_space(body_lbl, 2, 0);
     lv_label_set_recolor(body_lbl, true);
-    lv_obj_set_width(body_lbl, SCREEN_WIDTH - 16);
+    lv_obj_set_width(body_lbl, SCREEN_WIDTH - 24);
     lv_label_set_long_mode(body_lbl, LV_LABEL_LONG_WRAP);
-    // Body area: title=40px, bottom buttons=54px  ->  y_start=44, max_h=142px
-    lv_obj_align(body_lbl, LV_ALIGN_TOP_LEFT, 8, 44);
+    lv_obj_align(body_lbl, LV_ALIGN_TOP_LEFT, 0, 0);
 
-    // Cache body widget pointer for live updates (_lv_badge_label unused)
+    // Cache body widget pointer for live updates
     _lv_body_label  = body_lbl;
+    _lv_body_panel  = panel;
     _lv_badge_label = nullptr;
 
     lv_scr_load(scr);
@@ -160,61 +179,16 @@ void FactoryTest::_update_screen(const char *body, Result /*result*/)
     LVGL_UNLOCK();
 }
 
-bool FactoryTest::_wait_verdict()
+void FactoryTest::_add_verdict_buttons(bool auto_passed)
 {
     _verdict = -1;
-
-    if (!LVGL_LOCK(500)) return false;
+    if (!LVGL_LOCK(500)) return;
 
     lv_obj_t *scr = lv_scr_act();
 
-    // ── Ok button (green, left) ────────────────────────────────────────────────
-    lv_obj_t *ok_btn = lv_btn_create(scr);
-    lv_obj_set_size(ok_btn, 142, 44);
-    lv_obj_align(ok_btn, LV_ALIGN_BOTTOM_LEFT, 8, -6);
-    lv_obj_set_style_bg_color(ok_btn, lv_color_hex(COLOR_PASS), 0);
-    lv_obj_set_style_bg_color(ok_btn, lv_color_hex(0x27AE60), LV_STATE_PRESSED);
-    lv_obj_set_style_border_width(ok_btn, 0, 0);
-    lv_obj_set_style_radius(ok_btn, 6, 0);
-    lv_obj_add_event_cb(ok_btn, _on_ok_btn, LV_EVENT_CLICKED, this);
-    lv_obj_t *ok_lbl = lv_label_create(ok_btn);
-    lv_label_set_text(ok_lbl, LV_SYMBOL_OK "  Ok");
-    lv_obj_set_style_text_font(ok_lbl, &lv_font_montserrat_16, 0);
-    lv_obj_set_style_text_color(ok_lbl, lv_color_hex(0xFFFFFF), 0);
-    lv_obj_center(ok_lbl);
-
-    // ── Failed button (red, right) ─────────────────────────────────────────────
-    lv_obj_t *fail_btn = lv_btn_create(scr);
-    lv_obj_set_size(fail_btn, 142, 44);
-    lv_obj_align(fail_btn, LV_ALIGN_BOTTOM_RIGHT, -8, -6);
-    lv_obj_set_style_bg_color(fail_btn, lv_color_hex(COLOR_FAIL), 0);
-    lv_obj_set_style_bg_color(fail_btn, lv_color_hex(0xC0392B), LV_STATE_PRESSED);
-    lv_obj_set_style_border_width(fail_btn, 0, 0);
-    lv_obj_set_style_radius(fail_btn, 6, 0);
-    lv_obj_add_event_cb(fail_btn, _on_fail_btn, LV_EVENT_CLICKED, this);
-    lv_obj_t *fail_lbl = lv_label_create(fail_btn);
-    lv_label_set_text(fail_lbl, LV_SYMBOL_CLOSE "  Failed");
-    lv_obj_set_style_text_font(fail_lbl, &lv_font_montserrat_16, 0);
-    lv_obj_set_style_text_color(fail_lbl, lv_color_hex(0xFFFFFF), 0);
-    lv_obj_center(fail_lbl);
-
-    LVGL_UNLOCK();
-
-    // Block FreeRTOS task until user presses a button
-    while (_verdict < 0) {
-        vTaskDelay(pdMS_TO_TICKS(50));
-    }
-    return (_verdict == 1);
-}
-
-bool FactoryTest::_auto_or_verdict(bool auto_passed)
-{
-    if (!auto_passed) return _wait_verdict();
-
-    // Auto PASS: show a single full-width green "PASS — Continue" button.
-    _verdict = -1;
-    if (LVGL_LOCK(500)) {
-        lv_obj_t *btn = lv_btn_create(lv_scr_act());
+    if (auto_passed) {
+        // ── Single full-width green "PASS >> Continue" button ──────────────
+        lv_obj_t *btn = lv_btn_create(scr);
         lv_obj_set_size(btn, 304, 44);
         lv_obj_align(btn, LV_ALIGN_BOTTOM_MID, 0, -6);
         lv_obj_set_style_bg_color(btn, lv_color_hex(COLOR_PASS), 0);
@@ -227,10 +201,53 @@ bool FactoryTest::_auto_or_verdict(bool auto_passed)
         lv_obj_set_style_text_font(lbl, &lv_font_montserrat_16, 0);
         lv_obj_set_style_text_color(lbl, lv_color_hex(0xFFFFFF), 0);
         lv_obj_center(lbl);
-        LVGL_UNLOCK();
+    } else {
+        // ── Ok button (green, left) ────────────────────────────────────────
+        lv_obj_t *ok_btn = lv_btn_create(scr);
+        lv_obj_set_size(ok_btn, 142, 44);
+        lv_obj_align(ok_btn, LV_ALIGN_BOTTOM_LEFT, 8, -6);
+        lv_obj_set_style_bg_color(ok_btn, lv_color_hex(COLOR_PASS), 0);
+        lv_obj_set_style_bg_color(ok_btn, lv_color_hex(0x27AE60), LV_STATE_PRESSED);
+        lv_obj_set_style_border_width(ok_btn, 0, 0);
+        lv_obj_set_style_radius(ok_btn, 6, 0);
+        lv_obj_add_event_cb(ok_btn, _on_ok_btn, LV_EVENT_CLICKED, this);
+        lv_obj_t *ok_lbl = lv_label_create(ok_btn);
+        lv_label_set_text(ok_lbl, LV_SYMBOL_OK "  Ok");
+        lv_obj_set_style_text_font(ok_lbl, &lv_font_montserrat_16, 0);
+        lv_obj_set_style_text_color(ok_lbl, lv_color_hex(0xFFFFFF), 0);
+        lv_obj_center(ok_lbl);
+
+        // ── Failed button (red, right) ─────────────────────────────────────
+        lv_obj_t *fail_btn = lv_btn_create(scr);
+        lv_obj_set_size(fail_btn, 142, 44);
+        lv_obj_align(fail_btn, LV_ALIGN_BOTTOM_RIGHT, -8, -6);
+        lv_obj_set_style_bg_color(fail_btn, lv_color_hex(COLOR_FAIL), 0);
+        lv_obj_set_style_bg_color(fail_btn, lv_color_hex(0xC0392B), LV_STATE_PRESSED);
+        lv_obj_set_style_border_width(fail_btn, 0, 0);
+        lv_obj_set_style_radius(fail_btn, 6, 0);
+        lv_obj_add_event_cb(fail_btn, _on_fail_btn, LV_EVENT_CLICKED, this);
+        lv_obj_t *fail_lbl = lv_label_create(fail_btn);
+        lv_label_set_text(fail_lbl, LV_SYMBOL_CLOSE "  Failed");
+        lv_obj_set_style_text_font(fail_lbl, &lv_font_montserrat_16, 0);
+        lv_obj_set_style_text_color(fail_lbl, lv_color_hex(0xFFFFFF), 0);
+        lv_obj_center(fail_lbl);
     }
+
+    LVGL_UNLOCK();
+}
+
+bool FactoryTest::_wait_verdict()
+{
+    _add_verdict_buttons(false);
     while (_verdict < 0) vTaskDelay(pdMS_TO_TICKS(50));
-    return true;   // always PASS
+    return (_verdict == 1);
+}
+
+bool FactoryTest::_auto_or_verdict(bool auto_passed)
+{
+    _add_verdict_buttons(auto_passed);
+    while (_verdict < 0) vTaskDelay(pdMS_TO_TICKS(50));
+    return auto_passed || (_verdict == 1);
 }
 
 bool FactoryTest::_wait_touch(uint32_t wait_ms)
@@ -757,28 +774,136 @@ FactoryTest::Result FactoryTest::_test_pmu()
 {
     _show_screen(6, "PMU (AXP2101)", "Probing I2C...", Result::SKIP);
 
-    if (!i2c_probe(AXP2101_I2C_ADDR)) {
-        _update_screen("I2C 0x34     #E74C3C FAIL #\nNo ACK", Result::FAIL);
+    // AXP2101 I2C address: 0x34 (ADDR=GND default) or 0x35 (ADDR=VCC alt)
+    constexpr uint8_t AXP2101_ADDR_A = 0x34;
+    constexpr uint8_t AXP2101_ADDR_B = 0x35;
+    uint8_t found_addr = 0;
+    if      (i2c_probe(AXP2101_ADDR_A)) found_addr = AXP2101_ADDR_A;
+    else if (i2c_probe(AXP2101_ADDR_B)) found_addr = AXP2101_ADDR_B;
+
+    if (!found_addr) {
+        _update_screen("I2C 0x34/35  #E74C3C FAIL #\nNo ACK on either addr", Result::FAIL);
         return _auto_or_verdict(false) ? Result::PASS : Result::FAIL;
     }
 
-    // Read chip ID register (0x03) — AXP2101 returns 0x4A.
-    Wire.beginTransmission(AXP2101_I2C_ADDR);
-    Wire.write(0x03);
-    Wire.endTransmission(false);
-    Wire.requestFrom(AXP2101_I2C_ADDR, (uint8_t)1);
-    uint8_t chip_id = Wire.available() ? Wire.read() : 0xFF;
-    bool ok = (chip_id == 0x4A);
+    // I2C register helpers
+    auto read_reg = [&](uint8_t reg) -> uint8_t {
+        Wire.beginTransmission(found_addr);
+        Wire.write(reg);
+        Wire.endTransmission(false);
+        Wire.requestFrom(found_addr, (uint8_t)1);
+        return Wire.available() ? Wire.read() : 0xFF;
+    };
+    auto write_reg = [&](uint8_t reg, uint8_t val) {
+        Wire.beginTransmission(found_addr);
+        Wire.write(reg);
+        Wire.write(val);
+        Wire.endTransmission();
+    };
 
-    char l1[40], l2[40], l3[40], l4[40], msg[200];
-    snprintf(l1, sizeof(l1), "%-13s#2ECC71 OK   #", "I2C 0x34");
-    snprintf(l2, sizeof(l2), "%-13s0x%02X",          "ChipID",   chip_id);
-    snprintf(l3, sizeof(l3), "%-13s0x4A",            "Expected");
-    snprintf(l4, sizeof(l4), "%-13s#%s %-5s#",       "Match",
-             ok ? "2ECC71" : "E74C3C", ok ? "OK" : "FAIL");
-    snprintf(msg, sizeof(msg), "%s\n%s\n%s\n%s", l1, l2, l3, l4);
-    _update_screen(msg, ok ? Result::PASS : Result::FAIL);
-    return _auto_or_verdict(ok) ? Result::PASS : Result::FAIL;
+    // ── One-time static reads ──────────────────────────────────────────────
+    // Chip ID — reg 0x03 (IC_TYPE)
+    // AXP2101 standard: 0x4A;  AXP2101B/alt variant: 0x47
+    uint8_t chip_id = read_reg(0x03);
+    bool id_ok = (chip_id == 0x4A || chip_id == 0x47);
+
+    // Enable all ADC channels (reg 0x30 = ADC_CHANNEL_CTRL, write 0xFF)
+    write_reg(0x30, 0xFF);
+    // Also ensure fuel-gauge (coulomb counter) is active: reg 0x18 bit 2
+    uint8_t fg_ctrl = read_reg(0x18);
+    write_reg(0x18, fg_ctrl | 0x04);
+    vTaskDelay(pdMS_TO_TICKS(100));   // let ADC complete first conversion
+
+    // ── Static: LDO/DCDC config voltage registers (read once, don't change) ─
+    // DCDC1: reg 0x82, bits[4:0], step 100mV from 1500mV
+    uint16_t dc1_mv   = (uint16_t)((read_reg(0x82) & 0x1F) * 100u + 1500u);
+    // ALDO1-4: regs 0x92-0x95, bits[4:0], step 100mV from 500mV
+    auto ldo_mv = [&](uint8_t reg) -> uint16_t {
+        return (uint16_t)((read_reg(reg) & 0x1F) * 100u + 500u);
+    };
+    uint16_t aldo1_mv = ldo_mv(0x92);
+    uint16_t aldo2_mv = ldo_mv(0x93);
+    uint16_t aldo3_mv = ldo_mv(0x94);
+    uint16_t aldo4_mv = ldo_mv(0x95);
+    // BLDO1-2: regs 0x96-0x97, same formula
+    uint16_t bldo1_mv = ldo_mv(0x96);
+    uint16_t bldo2_mv = ldo_mv(0x97);
+
+    // ── Add verdict buttons (non-blocking) ────────────────────────────────
+    _add_verdict_buttons(id_ok);
+
+    // ── 100 ms real-time refresh loop ─────────────────────────────────────
+    while (_verdict < 0) {
+        // STATUS1 (0x00): bit5=VBUS_GOOD
+        uint8_t s1       = read_reg(0x00);
+        // STATUS2 (0x01): bit[2:0]=charge state
+        uint8_t s2       = read_reg(0x01);
+        bool vbus_good   = (s1 & (1u << 5)) != 0;
+        uint8_t chg_stat = s2 & 0x07;
+        // Charging when state is 1(Trickle)..5(Done)
+        bool is_charging = (chg_stat >= 1 && chg_stat <= 5);
+
+        // VBAT : H5L8 from 0x34/0x35 (13-bit, 1 mV/LSB)
+        uint16_t vbat    = (uint16_t)(((uint16_t)(read_reg(0x34) & 0x1F) << 8) | read_reg(0x35));
+        // VSYS : H6L8 from 0x36/0x37 (14-bit, 1 mV/LSB)
+        uint16_t vsys    = (uint16_t)(((uint16_t)(read_reg(0x36) & 0x3F) << 8) | read_reg(0x37));
+        // VBUS : H6L8 from 0x38/0x39 (14-bit, 1 mV/LSB)
+        uint16_t vbus_mv = (uint16_t)(((uint16_t)(read_reg(0x38) & 0x3F) << 8) | read_reg(0x39));
+        // Die Temp: formula from XPowersLib: 22.0 + (7274 - raw) / 20.0
+        uint16_t ts_raw  = (uint16_t)(((uint16_t)(read_reg(0x3C) & 0x3F) << 8) | read_reg(0x3D));
+        float temp_c     = 22.0f + (7274.0f - (float)ts_raw) / 20.0f;
+        bool temp_valid  = (temp_c >= -10.0f && temp_c <= 125.0f);
+        // Battery percent from fuel gauge (reg 0xA4, 0–100)
+        uint8_t bat_pct  = read_reg(0xA4);
+
+        char msg[1200];
+        int  n = 0;
+
+        // Error header: only when chip ID is wrong
+        if (!id_ok) {
+            n += snprintf(msg+n, sizeof(msg)-n,
+                "Chip ID      #E74C3C 0x%02X FAIL# (exp 4A/47)\n\n", chip_id);
+        }
+
+        // ── Dynamic section ──────────────────────────────────────────────
+        n += snprintf(msg+n, sizeof(msg)-n,
+            "isCharging   #%s %-3s#\n",
+            is_charging ? "2ECC71" : "BDC3C7", is_charging ? "YES" : "NO ");
+        n += snprintf(msg+n, sizeof(msg)-n,
+            "isVbusIn     #%s %-3s#\n",
+            vbus_good ? "2ECC71" : "BDC3C7", vbus_good ? "YES" : "NO ");
+        n += snprintf(msg+n, sizeof(msg)-n,
+            "BatteryPct   %d %%\n",  bat_pct);
+        n += snprintf(msg+n, sizeof(msg)-n,
+            "BatteryVolt  %u mV\n",  vbat);
+        if (vbus_good && vbus_mv > 0)
+            n += snprintf(msg+n, sizeof(msg)-n,
+                "VbusVoltage  %u mV\n", vbus_mv);
+        n += snprintf(msg+n, sizeof(msg)-n,
+            "SystemVolt   %u mV\n",  vsys);
+        if (temp_valid) {
+            int t_int  = (int)temp_c;
+            int t_frac = (int)((temp_c - (float)t_int) * 10.0f + 0.5f);
+            if (t_frac >= 10) { t_int++; t_frac = 0; }
+            n += snprintf(msg+n, sizeof(msg)-n,
+                "DieTemp      %d.%d C\n", t_int, t_frac);
+        }
+
+        // ── Static: power rail config voltages ───────────────────────────
+        n += snprintf(msg+n, sizeof(msg)-n, "\n");
+        n += snprintf(msg+n, sizeof(msg)-n, "DC1Voltage   %u mV\n",  dc1_mv);
+        n += snprintf(msg+n, sizeof(msg)-n, "ALDO1Voltage %u mV\n",  aldo1_mv);
+        n += snprintf(msg+n, sizeof(msg)-n, "ALDO2Voltage %u mV\n",  aldo2_mv);
+        n += snprintf(msg+n, sizeof(msg)-n, "ALDO3Voltage %u mV\n",  aldo3_mv);
+        n += snprintf(msg+n, sizeof(msg)-n, "ALDO4Voltage %u mV\n",  aldo4_mv);
+        n += snprintf(msg+n, sizeof(msg)-n, "BLDO1Voltage %u mV\n",  bldo1_mv);
+        n += snprintf(msg+n, sizeof(msg)-n, "BLDO2Voltage %u mV\n",  bldo2_mv);
+
+        _update_screen(msg, id_ok ? Result::PASS : Result::FAIL);
+        vTaskDelay(pdMS_TO_TICKS(100));
+    }
+
+    return (id_ok || _verdict == 1) ? Result::PASS : Result::FAIL;
 }
 
 FactoryTest::Result FactoryTest::_test_rtc()
