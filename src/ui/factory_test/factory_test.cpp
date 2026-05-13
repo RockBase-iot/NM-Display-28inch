@@ -5,6 +5,7 @@
 #include "../../bsp/nm_display_28/config.h"
 
 #include <lvgl.h>
+#include <esp_heap_caps.h>
 #include <Wire.h>
 #include <WiFi.h>
 #include <SD_MMC.h>
@@ -349,46 +350,135 @@ FactoryTest::Result FactoryTest::_test_display()
 
 FactoryTest::Result FactoryTest::_test_touch()
 {
-    _show_screen(2, "Touch", "Tap 3 different spots\nwithin 15 seconds.", Result::SKIP);
-
     Touch *touch = _board.get_touch();
-    if (!touch) {
-        _update_screen("No touch driver", Result::SKIP);
-        vTaskDelay(pdMS_TO_TICKS(2000));
+    _verdict = -1;
+
+    // Canvas occupies the space between title bar (40px) and buttons (54px).
+    constexpr uint16_t TITLE_H  = 40;
+    constexpr uint16_t BTN_H    = 54;
+    constexpr uint16_t CANVAS_W = SCREEN_WIDTH;
+    constexpr uint16_t CANVAS_H = SCREEN_HEIGHT - TITLE_H - BTN_H;  // 146px
+
+    // Allocate canvas pixel buffer in PSRAM (~91 KB for 320×146 RGB565)
+    const size_t buf_sz = LV_CANVAS_BUF_SIZE_TRUE_COLOR(CANVAS_W, CANVAS_H);
+    auto *cbuf = static_cast<lv_color_t *>(
+        heap_caps_malloc(buf_sz, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
+
+    lv_obj_t *canvas   = nullptr;
+    lv_obj_t *hint_lbl = nullptr;
+
+    if (!LVGL_LOCK(500)) {
+        if (cbuf) heap_caps_free(cbuf);
         return Result::SKIP;
     }
 
-    int taps = 0;
-    char msg[64];
-    const uint32_t timeout_ms = 15000;
-    const uint32_t poll_ms    = 50;
-    uint32_t elapsed = 0;
-    bool     prev_pressed = false;
+    // ── Screen ───────────────────────────────────────────────────────────────
+    lv_obj_t *scr = lv_obj_create(nullptr);
+    lv_obj_set_style_bg_color(scr, lv_color_hex(COLOR_BG), 0);
+    lv_obj_set_style_bg_opa(scr, LV_OPA_COVER, 0);
+    lv_obj_set_style_border_width(scr, 0, 0);
+    lv_obj_clear_flag(scr, LV_OBJ_FLAG_SCROLLABLE);
 
-    while (taps < 3 && elapsed < timeout_ms) {
-        touch_point_t tp;
-        touch->read(&tp);
+    // ── Title bar (bold Montserrat 16) ────────────────────────────────────────
+    lv_obj_t *title_bar = lv_obj_create(scr);
+    lv_obj_set_size(title_bar, SCREEN_WIDTH, TITLE_H);
+    lv_obj_align(title_bar, LV_ALIGN_TOP_MID, 0, 0);
+    lv_obj_set_style_bg_color(title_bar, lv_color_hex(COLOR_TITLE_BG), 0);
+    lv_obj_set_style_border_width(title_bar, 0, 0);
+    lv_obj_set_style_radius(title_bar, 0, 0);
+    lv_obj_set_style_pad_all(title_bar, 4, 0);
+    lv_obj_clear_flag(title_bar, LV_OBJ_FLAG_SCROLLABLE);
 
-        if (tp.pressed && !prev_pressed) {
-            taps++;
-            snprintf(msg, sizeof(msg), "Tap %d/3 at (%d, %d)", taps, tp.x, tp.y);
-            _update_screen(msg, Result::SKIP);
-            LOG_I("Touch tap %d: x=%d y=%d", taps, tp.x, tp.y);
+    lv_obj_t *title_lbl = lv_label_create(title_bar);
+    lv_label_set_text(title_lbl, "Test 2/9: Touch");
+    lv_obj_set_style_text_color(title_lbl, lv_color_hex(COLOR_TEXT), 0);
+    lv_obj_set_style_text_font(title_lbl, &lv_font_montserrat_16, 0);
+    lv_obj_center(title_lbl);
+
+    // ── Drawing canvas ────────────────────────────────────────────────────────
+    if (cbuf) {
+        canvas = lv_canvas_create(scr);
+        lv_canvas_set_buffer(canvas, cbuf, CANVAS_W, CANVAS_H, LV_IMG_CF_TRUE_COLOR);
+        lv_obj_set_pos(canvas, 0, TITLE_H);
+        lv_canvas_fill_bg(canvas, lv_color_hex(0x0D0D20), LV_OPA_COVER);
+    }
+
+    // Hint label overlaid on the canvas area, hidden on first touch
+    hint_lbl = lv_label_create(scr);
+    lv_label_set_text(hint_lbl, touch ? "Draw with your finger..." : "No touch driver");
+    lv_obj_set_style_text_color(hint_lbl, lv_color_hex(COLOR_SKIP), 0);
+    lv_obj_set_style_text_font(hint_lbl, &lv_font_unscii_8, 0);
+    lv_obj_set_width(hint_lbl, CANVAS_W);
+    lv_obj_set_style_text_align(hint_lbl, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_set_pos(hint_lbl, 0, TITLE_H + CANVAS_H / 2 - 5);
+
+    // ── Ok / Failed buttons ───────────────────────────────────────────────────
+    lv_obj_t *ok_btn = lv_btn_create(scr);
+    lv_obj_set_size(ok_btn, 142, 44);
+    lv_obj_align(ok_btn, LV_ALIGN_BOTTOM_LEFT, 8, -6);
+    lv_obj_set_style_bg_color(ok_btn, lv_color_hex(COLOR_PASS), 0);
+    lv_obj_set_style_bg_color(ok_btn, lv_color_hex(0x27AE60), LV_STATE_PRESSED);
+    lv_obj_set_style_border_width(ok_btn, 0, 0);
+    lv_obj_set_style_radius(ok_btn, 6, 0);
+    lv_obj_add_event_cb(ok_btn, _on_ok_btn, LV_EVENT_CLICKED, this);
+    lv_obj_t *ok_lbl = lv_label_create(ok_btn);
+    lv_label_set_text(ok_lbl, LV_SYMBOL_OK "  Ok");
+    lv_obj_set_style_text_color(ok_lbl, lv_color_hex(0xFFFFFF), 0);
+    lv_obj_center(ok_lbl);
+
+    lv_obj_t *fail_btn = lv_btn_create(scr);
+    lv_obj_set_size(fail_btn, 142, 44);
+    lv_obj_align(fail_btn, LV_ALIGN_BOTTOM_RIGHT, -8, -6);
+    lv_obj_set_style_bg_color(fail_btn, lv_color_hex(COLOR_FAIL), 0);
+    lv_obj_set_style_bg_color(fail_btn, lv_color_hex(0xC0392B), LV_STATE_PRESSED);
+    lv_obj_set_style_border_width(fail_btn, 0, 0);
+    lv_obj_set_style_radius(fail_btn, 6, 0);
+    lv_obj_add_event_cb(fail_btn, _on_fail_btn, LV_EVENT_CLICKED, this);
+    lv_obj_t *fail_lbl = lv_label_create(fail_btn);
+    lv_label_set_text(fail_lbl, LV_SYMBOL_CLOSE "  Failed");
+    lv_obj_set_style_text_color(fail_lbl, lv_color_hex(0xFFFFFF), 0);
+    lv_obj_center(fail_lbl);
+
+    lv_scr_load(scr);
+    LVGL_UNLOCK();
+
+    // ── Touch-drawing poll loop ───────────────────────────────────────────────
+    const uint32_t poll_ms  = 20;
+    bool hint_hidden = false;
+
+    while (_verdict < 0) {
+        if (touch && canvas && cbuf) {
+            touch_point_t tp;
+            touch->read(&tp);
+
+            if (tp.pressed) {
+                int cx = (int)tp.x;
+                int cy = (int)tp.y - TITLE_H;
+
+                if (cx >= 0 && cx < CANVAS_W && cy >= 0 && cy < CANVAS_H) {
+                    if (LVGL_LOCK(10)) {
+                        if (!hint_hidden) {
+                            lv_obj_add_flag(hint_lbl, LV_OBJ_FLAG_HIDDEN);
+                            hint_hidden = true;
+                        }
+                        lv_draw_rect_dsc_t rdsc;
+                        lv_draw_rect_dsc_init(&rdsc);
+                        rdsc.bg_color = lv_color_hex(0x00E5AA);
+                        rdsc.bg_opa   = LV_OPA_COVER;
+                        rdsc.radius   = LV_RADIUS_CIRCLE;
+                        lv_canvas_draw_rect(canvas, cx - 4, cy - 4, 9, 9, &rdsc);
+                        LVGL_UNLOCK();
+                    }
+                }
+            }
         }
-        prev_pressed = tp.pressed;
-
         vTaskDelay(pdMS_TO_TICKS(poll_ms));
-        elapsed += poll_ms;
     }
 
-    if (taps >= 3) {
-        _update_screen("Taps detected  : 3/3\nResult         : OK", Result::PASS);
-    } else {
-        snprintf(msg, sizeof(msg),
-                 "Taps detected  : %d/3\nResult         : TIMEOUT", taps);
-        _update_screen(msg, Result::FAIL);
-    }
-    return _wait_verdict() ? Result::PASS : Result::FAIL;
+    bool passed = (_verdict == 1);
+    vTaskDelay(pdMS_TO_TICKS(80));   // let LVGL flush the last frame before cbuf is freed
+    if (cbuf) heap_caps_free(cbuf);
+    return passed ? Result::PASS : Result::FAIL;
 }
 
 FactoryTest::Result FactoryTest::_test_sdcard()
