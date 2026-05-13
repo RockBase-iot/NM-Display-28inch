@@ -196,8 +196,8 @@
 #define LV_FONT_SIMSUN_16_CJK            0
 
 /* Built-in pixel fonts */
-#define LV_FONT_UNSCII_8  1   /* Monospace font for test body / aligned output */
-#define LV_FONT_UNSCII_16 0
+#define LV_FONT_UNSCII_8  0
+#define LV_FONT_UNSCII_16 0   /* Replaced by Inconsolata_16/20 custom fonts */
 
 /* Custom font declarations — add here if using external fonts */
 /* #define LV_FONT_CUSTOM_DECLARE */

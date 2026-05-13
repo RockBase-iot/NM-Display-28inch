@@ -64,8 +64,7 @@ private:
     bool _wait_verdict();
 
     // Show the final summary and block until the user taps.
-    void _show_summary(int pass, int fail, int skip,
-                       const char fail_names[][32], int fail_count);
+    void _show_summary(const char * const names[], const Result results[], int count);
 
     // ── LVGL button event callbacks (static so they can access private _verdict) ─
     static void _on_ok_btn(lv_event_t *e);

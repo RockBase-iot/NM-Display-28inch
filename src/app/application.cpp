@@ -36,8 +36,18 @@ bool NMDisplay28App::init() {
         while (true) delay(1000);
     }
 
-    // Turn on backlight once LVGL is ready
-    disp->blctrl(0.85f);
+    // Backlight stays OFF (0%) — boot_anim will fade it in after the first GIF
+    // frame is on screen, giving a clean "gradual power-on" effect with no
+    // visible blank time.  Meanwhile load a solid-black LVGL screen so the
+    // display controller shows a defined state even before the GIF starts.
+    if (LVGL_LOCK(200)) {
+        lv_obj_t *black_scr = lv_obj_create(nullptr);
+        lv_obj_set_style_bg_color(black_scr, lv_color_hex(0x000000), 0);
+        lv_obj_set_style_bg_opa(black_scr, LV_OPA_COVER, 0);
+        lv_obj_set_style_border_width(black_scr, 0, 0);
+        lv_scr_load(black_scr);
+        LVGL_UNLOCK();
+    }
 
     // Mount SPIFFS so boot.gif is accessible before begin() is called.
     if (!SPIFFS.begin(true)) {

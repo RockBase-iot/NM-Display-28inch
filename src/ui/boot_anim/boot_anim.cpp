@@ -127,6 +127,8 @@ void BootAnim::_play_loop()
 
     LOG_I("BootAnim: playing %s  (%d x %d)", _gif_path, _gif.getCanvasWidth(), _gif.getCanvasHeight());
 
+    bool first_frame_shown = false;   // tracks whether we have faded in yet
+
     while (!_stop_flag) {
         // Record frame start time so decode+push cost is subtracted from the sleep.
         int64_t t_start = esp_timer_get_time();
@@ -143,6 +145,18 @@ void BootAnim::_play_loop()
             _disp->pushColors(_frame_buf, SCREEN_WIDTH * SCREEN_HEIGHT, true);
             _disp->endWrite();
             LVGL_UNLOCK();
+        }
+
+        // On the very first frame, fade the backlight from 0 → 85% over ~400 ms
+        // so the screen "gradually powers on" rather than jumping from black.
+        if (!first_frame_shown) {
+            first_frame_shown = true;
+            constexpr int   FADE_STEPS = 25;
+            constexpr float FADE_TARGET = 0.85f;
+            for (int step = 1; step <= FADE_STEPS && !_stop_flag; step++) {
+                _disp->blctrl(FADE_TARGET * step / FADE_STEPS);
+                vTaskDelay(pdMS_TO_TICKS(16));   // 25 × 16 ms ≈ 400 ms total
+            }
         }
 
         // Poll touch directly — LVGL's indev poll runs inside the LVGL task
