@@ -56,7 +56,7 @@ void FactoryTest::_on_imu_toggle_btn(lv_event_t *e)
     auto *ctx = static_cast<ImuToggleCtx *>(lv_event_get_user_data(e));
     bool new3d = !(*ctx->show_3d);
     *ctx->show_3d = new3d;
-    lv_label_set_text(ctx->toggle_lbl, new3d ? "RAW" : "3D");
+    lv_label_set_text(ctx->toggle_lbl, new3d ? "RAW" : "AHRS");
     if (new3d) {
         lv_obj_add_flag  (ctx->tbl_panel, LV_OBJ_FLAG_HIDDEN);
         lv_obj_clear_flag(ctx->canvas,    LV_OBJ_FLAG_HIDDEN);
@@ -66,61 +66,277 @@ void FactoryTest::_on_imu_toggle_btn(lv_event_t *e)
     }
 }
 
-// ─── 3D wireframe cube helper ─────────────────────────────────────────────────
-// Draws a perspective-projected unit cube rotated by quaternion q onto canvas.
-// Must be called with the LVGL mutex held.
-static void _draw_cube_frame(lv_obj_t *canvas, const Quat &q)
+// ─── AHRS artificial-horizon helper ──────────────────────────────────────────
+// Draws artificial horizon (roll+pitch), roll-arc indicator, yaw compass tape,
+// and numeric readouts onto canvas.
+// roll / pitch / yaw are in radians.  Must be called with the LVGL mutex held.
+//
+// Geometry conventions (screen coords: x→right, y↓down):
+//   Horizon direction : (cos R,  −sin R)      R = roll
+//   Sky normal        : (−sin R, −cos R)
+//   Ground-side test  : (Px−hcx)·sinR + (Py−hcy)·cosR > 0
+//   Pitch offset      : nose-up → hcy > cy_m (horizon moves DOWN)
+//   Roll arc ptr angle: LVGL_angle = 90 − roll_deg
+//     (LVGL 0°=right, CW;  90°=bottom of arc = level flight)
+static void _draw_ahrs_frame(lv_obj_t *canvas, float roll, float pitch, float yaw)
 {
-    // 8 cube vertices, half-size = 0.5 (bit-encoded: x=bit0 y=bit1 z=bit2)
-    static const float CV[8][3] = {
-        {-0.5f,-0.5f,-0.5f}, { 0.5f,-0.5f,-0.5f},
-        {-0.5f, 0.5f,-0.5f}, { 0.5f, 0.5f,-0.5f},
-        {-0.5f,-0.5f, 0.5f}, { 0.5f,-0.5f, 0.5f},
-        {-0.5f, 0.5f, 0.5f}, { 0.5f, 0.5f, 0.5f},
+    constexpr int  CW     = SCREEN_WIDTH;            // 320
+    constexpr int  CH     = SCREEN_HEIGHT - 40 - 54; // 146
+    constexpr int  YAW_H  = 26;                      // yaw tape height (bottom)
+    constexpr int  MAIN_H = CH - YAW_H;              // 120
+    const float    cx     = CW   * 0.5f;             // 160
+    const float    cy_m   = MAIN_H * 0.5f;           // 60
+
+    const float pitch_deg = pitch * 57.295779f;
+    const float roll_deg  = roll  * 57.295779f;
+    float       yaw_deg   = yaw   * 57.295779f;
+    while (yaw_deg <    0.f) yaw_deg += 360.f;
+    while (yaw_deg >= 360.f) yaw_deg -= 360.f;
+
+    // ── Horizon geometry ──────────────────────────────────────────────────
+    const float sr = sinf(roll), cr = cosf(roll);
+    constexpr float PPD = 2.8f;   // px / degree of pitch
+    float pitch_px = pitch_deg * PPD;
+    const float max_pp = cy_m - 4.f;
+    if (pitch_px >  max_pp) pitch_px =  max_pp;
+    if (pitch_px < -max_pp) pitch_px = -max_pp;
+    const float hcx = cx, hcy = cy_m + pitch_px;
+
+    // ── Horizon-canvas intersections ──────────────────────────────────────
+    // Parametric: P(t) = (hcx + t·cr,  hcy − t·sr)
+    lv_point_t h_pts[2]; int hpc = 0;
+    auto try_edge = [&](float t) {
+        if (hpc >= 2) return;
+        float px_ = hcx + t * cr, py_ = hcy - t * sr;
+        if (px_ < -1.f || px_ > CW+1.f || py_ < -1.f || py_ > MAIN_H+1.f) return;
+        if (hpc==1 && fabsf(px_-h_pts[0].x)<2.f && fabsf(py_-h_pts[0].y)<2.f) return;
+        h_pts[hpc++] = {
+            (lv_coord_t)roundf(fmaxf(0.f, fminf((float)CW,     px_))),
+            (lv_coord_t)roundf(fmaxf(0.f, fminf((float)MAIN_H, py_)))
+        };
     };
-    // 12 edges: each pair shares exactly 1 differing bit
-    static const uint8_t EDGES[12][2] = {
-        {0,1},{2,3},{4,5},{6,7},   // x-axis edges
-        {0,2},{1,3},{4,6},{5,7},   // y-axis edges
-        {0,4},{1,5},{2,6},{3,7},   // z-axis edges
-    };
-
-    constexpr uint16_t CW   = SCREEN_WIDTH;
-    constexpr uint16_t CH   = SCREEN_HEIGHT - 40 - 54;   // body panel height = 146
-    constexpr float    FOCAL = 150.0f;
-    constexpr float    CAM_Z = 3.0f;
-    const float        cx    = CW * 0.5f;
-    const float        cy    = CH * 0.5f;
-
-    lv_canvas_fill_bg(canvas, lv_color_hex(0x0D1A30), LV_OPA_COVER);
-
-    // Rotate each vertex: r = q ⊗ v_pure ⊗ q*
-    float px[8], py[8];
-    for (int i = 0; i < 8; i++) {
-        Quat pv = {0.0f, CV[i][0], CV[i][1], CV[i][2]};
-        Quat r  = q * pv * q.conjugate();
-        float z_eff = CAM_Z + r.z;
-        if (z_eff < 0.1f) z_eff = 0.1f;
-        float proj = FOCAL / z_eff;
-        px[i] = cx + r.x * proj;
-        py[i] = cy + r.y * proj;
+    if (fabsf(cr) > 0.01f) { try_edge(-hcx/cr); try_edge((CW-hcx)/cr); }
+    if (fabsf(sr) > 0.01f) { try_edge(hcy/sr);  try_edge((hcy-MAIN_H)/sr); }
+    if (hpc < 2 && fabsf(cr) <= 0.01f) {          // near-vertical fallback
+        lv_coord_t hx = (lv_coord_t)roundf(fmaxf(0.f, fminf((float)CW, hcx)));
+        h_pts[0] = {hx, 0}; h_pts[1] = {hx, (lv_coord_t)MAIN_H}; hpc = 2;
     }
 
-    lv_draw_line_dsc_t ldsc;
-    lv_draw_line_dsc_init(&ldsc);
-    ldsc.color       = lv_color_hex(0x00B4FF);
-    ldsc.width       = 2;
-    ldsc.round_start = 1;
-    ldsc.round_end   = 1;
-    ldsc.opa         = LV_OPA_COVER;
+    // ── 1. Sky fill ───────────────────────────────────────────────────────
+    lv_canvas_fill_bg(canvas, lv_color_hex(0x1A6FA8), LV_OPA_COVER);
 
-    for (int i = 0; i < 12; i++) {
-        int a = EDGES[i][0], b = EDGES[i][1];
-        lv_point_t pts[2] = {
-            {(lv_coord_t)px[a], (lv_coord_t)py[a]},
-            {(lv_coord_t)px[b], (lv_coord_t)py[b]},
+    // ── 2. Ground polygon ─────────────────────────────────────────────────
+    {
+        auto is_ground = [&](float px_, float py_) {
+            return (px_ - hcx)*sr + (py_ - hcy)*cr > 0.f;
         };
-        lv_canvas_draw_line(canvas, pts, 2, &ldsc);
+        lv_point_t gnd[8]; int gnc = 0;
+        if (hpc == 2) { gnd[gnc++] = h_pts[0]; gnd[gnc++] = h_pts[1]; }
+        lv_point_t corners[4] = {
+            {0,0}, {(lv_coord_t)CW,0},
+            {(lv_coord_t)CW,(lv_coord_t)MAIN_H}, {0,(lv_coord_t)MAIN_H}
+        };
+        for (auto &c : corners) { if (is_ground(c.x, c.y)) gnd[gnc++] = c; }
+        if (gnc >= 3) {
+            float gcx = 0, gcyc = 0;
+            for (int i = 0; i < gnc; i++) { gcx += gnd[i].x; gcyc += gnd[i].y; }
+            gcx /= gnc; gcyc /= gnc;
+            for (int i = 0; i < gnc-1; i++)
+                for (int j = i+1; j < gnc; j++)
+                    if (atan2f(gnd[i].y-gcyc, gnd[i].x-gcx) >
+                        atan2f(gnd[j].y-gcyc, gnd[j].x-gcx))
+                    { lv_point_t tmp=gnd[i]; gnd[i]=gnd[j]; gnd[j]=tmp; }
+            lv_draw_rect_dsc_t rdsc; lv_draw_rect_dsc_init(&rdsc);
+            rdsc.bg_color = lv_color_hex(0x7B4F1E); rdsc.bg_opa = LV_OPA_COVER;
+            rdsc.border_width = 0; rdsc.radius = 0;
+            lv_canvas_draw_polygon(canvas, gnd, gnc, &rdsc);
+        }
+    }
+
+    // ── 3. Horizon line ───────────────────────────────────────────────────
+    if (hpc == 2) {
+        lv_draw_line_dsc_t ldsc; lv_draw_line_dsc_init(&ldsc);
+        ldsc.color = lv_color_hex(0xFFFFFF); ldsc.width = 2; ldsc.opa = LV_OPA_COVER;
+        lv_canvas_draw_line(canvas, h_pts, 2, &ldsc);
+    }
+
+    // ── 4. Pitch ladder ───────────────────────────────────────────────────
+    // Rung at Δp°: centre = (hcx − Δp·PPD·sr,  hcy − Δp·PPD·cr)
+    // Rung direction: (cr, −sr)  (same as horizon)
+    {
+        lv_draw_line_dsc_t ldsc; lv_draw_line_dsc_init(&ldsc);
+        ldsc.width = 1; ldsc.opa = LV_OPA_COVER;
+        ldsc.round_start = 0; ldsc.round_end = 0;
+        for (int dp = -30; dp <= 30; dp += 10) {
+            if (dp == 0) continue;
+            float rcx_ = hcx - dp * PPD * sr;
+            float rcy_  = hcy - dp * PPD * cr;
+            if (rcy_ < -25 || rcy_ > MAIN_H+25 || rcx_ < -70 || rcx_ > CW+70) continue;
+            float rlen = (abs(dp) >= 20) ? 42.f : 30.f;
+            ldsc.color = (dp > 0) ? lv_color_hex(0xFFFFFF) : lv_color_hex(0xD4B483);
+            lv_point_t rung[2] = {
+                {(lv_coord_t)roundf(rcx_-rlen*cr), (lv_coord_t)roundf(rcy_+rlen*sr)},
+                {(lv_coord_t)roundf(rcx_+rlen*cr), (lv_coord_t)roundf(rcy_-rlen*sr)}
+            };
+            lv_canvas_draw_line(canvas, rung, 2, &ldsc);
+            // End ticks (perpendicular, pointing toward horizon)
+            float tx = (dp>0)?sr:-sr, ty_t = (dp>0)?cr:-cr;
+            constexpr float TK = 6.f;
+            lv_point_t tkL[2] = {
+                {(lv_coord_t)roundf(rcx_-rlen*cr),       (lv_coord_t)roundf(rcy_+rlen*sr)},
+                {(lv_coord_t)roundf(rcx_-rlen*cr+TK*tx), (lv_coord_t)roundf(rcy_+rlen*sr+TK*ty_t)}
+            };
+            lv_point_t tkR[2] = {
+                {(lv_coord_t)roundf(rcx_+rlen*cr),       (lv_coord_t)roundf(rcy_-rlen*sr)},
+                {(lv_coord_t)roundf(rcx_+rlen*cr+TK*tx), (lv_coord_t)roundf(rcy_-rlen*sr+TK*ty_t)}
+            };
+            lv_canvas_draw_line(canvas, tkL, 2, &ldsc);
+            lv_canvas_draw_line(canvas, tkR, 2, &ldsc);
+        }
+    }
+
+    // ── 5. Roll arc indicator ─────────────────────────────────────────────
+    // Arc centre at canvas top-centre (160, 0), radius 55.
+    // LVGL arc 30°–150° = the ∪-shape visible in the canvas.
+    // Pointer LVGL angle = 90 − roll_deg  (right bank → pointer right of bottom)
+    {
+        constexpr int ARC_R = 55, ARC_CX = CW/2, ARC_CY = 0;
+        // Rail
+        lv_draw_arc_dsc_t adsc; lv_draw_arc_dsc_init(&adsc);
+        adsc.color = lv_color_hex(0xAAAAAA); adsc.width = 1; adsc.opa = LV_OPA_80;
+        lv_canvas_draw_arc(canvas, ARC_CX, ARC_CY, ARC_R, 30, 150, &adsc);
+        // Tick marks
+        lv_draw_line_dsc_t ldsc; lv_draw_line_dsc_init(&ldsc);
+        ldsc.color = lv_color_hex(0xAAAAAA); ldsc.width = 1; ldsc.opa = LV_OPA_80;
+        const int tick_rolls[] = {-60,-45,-30,-20,-10,0,10,20,30,45,60};
+        for (int tr : tick_rolls) {
+            float ang = (90 - tr) * 0.017453293f;
+            float tc = cosf(ang), ts = sinf(ang);
+            float inner = (float)ARC_R - ((abs(tr)%30==0||tr==0)?8.f:(abs(tr)%45==0?7.f:4.f));
+            lv_point_t tp[2] = {
+                {(lv_coord_t)roundf(ARC_CX + ARC_R*tc), (lv_coord_t)roundf(ARC_CY + ARC_R*ts)},
+                {(lv_coord_t)roundf(ARC_CX + inner*tc), (lv_coord_t)roundf(ARC_CY + inner*ts)}
+            };
+            lv_canvas_draw_line(canvas, tp, 2, &ldsc);
+        }
+        // Gold pointer triangle
+        float ptr_ang = 90.f - roll_deg;
+        if (ptr_ang <  30.f) ptr_ang =  30.f;
+        if (ptr_ang > 150.f) ptr_ang = 150.f;
+        float prad = ptr_ang * 0.017453293f;
+        float pc = cosf(prad), ps = sinf(prad);
+        float baser = ARC_R - 10.f;
+        float perp_x = -ps, perp_y = pc;
+        constexpr float TRI_W = 4.5f;
+        lv_point_t tri[3] = {
+            {(lv_coord_t)roundf(ARC_CX + ARC_R*pc), (lv_coord_t)roundf(ARC_CY + ARC_R*ps)},
+            {(lv_coord_t)roundf(ARC_CX + baser*pc + TRI_W*perp_x),
+             (lv_coord_t)roundf(ARC_CY + baser*ps + TRI_W*perp_y)},
+            {(lv_coord_t)roundf(ARC_CX + baser*pc - TRI_W*perp_x),
+             (lv_coord_t)roundf(ARC_CY + baser*ps - TRI_W*perp_y)}
+        };
+        lv_draw_rect_dsc_t rdsc; lv_draw_rect_dsc_init(&rdsc);
+        rdsc.bg_color = lv_color_hex(0xFFD700); rdsc.bg_opa = LV_OPA_COVER;
+        rdsc.border_width = 0; rdsc.radius = 0;
+        lv_canvas_draw_polygon(canvas, tri, 3, &rdsc);
+    }
+
+    // ── 6. Fixed aircraft symbol (gold) ──────────────────────────────────
+    {
+        const lv_coord_t acx = CW/2, acy = MAIN_H/2;
+        lv_draw_line_dsc_t ldsc; lv_draw_line_dsc_init(&ldsc);
+        ldsc.color = lv_color_hex(0xFFD700); ldsc.width = 3;
+        ldsc.opa = LV_OPA_COVER; ldsc.round_start = 1; ldsc.round_end = 1;
+        lv_point_t lw[2] = {{(lv_coord_t)(acx-38),(lv_coord_t)acy},{(lv_coord_t)(acx-8),(lv_coord_t)acy}};
+        lv_point_t rw[2] = {{(lv_coord_t)(acx+8), (lv_coord_t)acy},{(lv_coord_t)(acx+38),(lv_coord_t)acy}};
+        lv_canvas_draw_line(canvas, lw, 2, &ldsc);
+        lv_canvas_draw_line(canvas, rw, 2, &ldsc);
+        lv_draw_rect_dsc_t rdsc; lv_draw_rect_dsc_init(&rdsc);
+        rdsc.bg_color = lv_color_hex(0xFFD700); rdsc.bg_opa = LV_OPA_COVER;
+        rdsc.border_width = 0; rdsc.radius = LV_RADIUS_CIRCLE;
+        lv_canvas_draw_rect(canvas, acx-5, acy-5, 10, 10, &rdsc);
+        lv_point_t tail[2] = {{acx,(lv_coord_t)(acy+5)},{acx,(lv_coord_t)(acy+13)}};
+        lv_canvas_draw_line(canvas, tail, 2, &ldsc);
+    }
+
+    // ── 7. Roll / Pitch numeric readout (top-left, below arc) ────────────
+    {
+        lv_draw_label_dsc_t tdsc; lv_draw_label_dsc_init(&tdsc);
+        tdsc.color = lv_color_hex(0xFFFFFF); tdsc.font = &lv_font_montserrat_14;
+        char buf[16];
+        snprintf(buf, sizeof(buf), "R%+5.1f", roll_deg);
+        lv_canvas_draw_text(canvas, 4, 20, 74, &tdsc, buf);
+        snprintf(buf, sizeof(buf), "P%+5.1f", pitch_deg);
+        lv_canvas_draw_text(canvas, 4, 36, 74, &tdsc, buf);
+    }
+
+    // ── 8. Yaw compass tape (bottom YAW_H px) ────────────────────────────
+    {
+        const lv_coord_t ty = (lv_coord_t)MAIN_H;   // tape top y = 120
+        // Background
+        {
+            lv_draw_rect_dsc_t rdsc; lv_draw_rect_dsc_init(&rdsc);
+            rdsc.bg_color = lv_color_hex(0x0F1A2E); rdsc.bg_opa = LV_OPA_COVER;
+            rdsc.border_width = 0; rdsc.radius = 0;
+            lv_canvas_draw_rect(canvas, 0, ty, CW, YAW_H, &rdsc);
+        }
+        // Gold centre pointer triangle (tip points down)
+        {
+            lv_draw_rect_dsc_t rdsc; lv_draw_rect_dsc_init(&rdsc);
+            rdsc.bg_color = lv_color_hex(0xFFD700); rdsc.bg_opa = LV_OPA_COVER;
+            rdsc.border_width = 0; rdsc.radius = 0;
+            lv_point_t cptr[3] = {
+                {(lv_coord_t)(CW/2-5), ty},
+                {(lv_coord_t)(CW/2+5), ty},
+                {(lv_coord_t)(CW/2),   (lv_coord_t)(ty+7)}
+            };
+            lv_canvas_draw_polygon(canvas, cptr, 3, &rdsc);
+        }
+        // Ticks + cardinal labels (every 10°, labelled at 45° multiples)
+        constexpr float PPD_YAW = 3.0f;
+        lv_draw_line_dsc_t ldsc; lv_draw_line_dsc_init(&ldsc);
+        ldsc.opa = LV_OPA_COVER; ldsc.width = 1;
+        lv_draw_label_dsc_t tdsc; lv_draw_label_dsc_init(&tdsc);
+        tdsc.font = &lv_font_montserrat_14;
+        int first10 = (int)floorf((yaw_deg - 54.f) / 10.f) * 10;
+        for (int hi = first10; hi <= (int)(yaw_deg + 55.f); hi += 10) {
+            float sx = cx + (hi - yaw_deg) * PPD_YAW;
+            if (sx < 2.f || sx > CW - 2.f) continue;
+            int hnorm = ((hi % 360) + 360) % 360;
+            bool is_card  = (hnorm % 90 == 0);
+            bool is_icard = (hnorm % 45 == 0 && !is_card);
+            int tick_h = is_card ? 10 : (is_icard ? 7 : 4);
+            ldsc.color = is_card  ? lv_color_hex(0xFFFFFF) :
+                         is_icard ? lv_color_hex(0xBBBBBB) : lv_color_hex(0x555555);
+            lv_point_t tick[2] = {
+                {(lv_coord_t)roundf(sx), (lv_coord_t)(ty + YAW_H - tick_h)},
+                {(lv_coord_t)roundf(sx), (lv_coord_t)(ty + YAW_H)}
+            };
+            lv_canvas_draw_line(canvas, tick, 2, &ldsc);
+            if (is_card || is_icard) {
+                const char *lbl = nullptr;
+                switch (hnorm) {
+                    case   0: lbl = "N";  break; case  45: lbl = "NE"; break;
+                    case  90: lbl = "E";  break; case 135: lbl = "SE"; break;
+                    case 180: lbl = "S";  break; case 225: lbl = "SW"; break;
+                    case 270: lbl = "W";  break; case 315: lbl = "NW"; break;
+                }
+                if (lbl) {
+                    int lw = (strlen(lbl)==1) ? 11 : 20;
+                    tdsc.color = is_card ? lv_color_hex(0xFFFFFF) : lv_color_hex(0xBBBBBB);
+                    lv_canvas_draw_text(canvas,
+                        (lv_coord_t)roundf(sx) - lw/2, ty+2,
+                        (lv_coord_t)(lw+2), &tdsc, lbl);
+                }
+            }
+        }
+        // Current heading (3 digits, gold, right side of tape)
+        {
+            char hdg[5]; snprintf(hdg, sizeof(hdg), "%03d", ((int)roundf(yaw_deg)) % 360);
+            lv_draw_label_dsc_t tdsc2; lv_draw_label_dsc_init(&tdsc2);
+            tdsc2.color = lv_color_hex(0xFFD700); tdsc2.font = &lv_font_montserrat_14;
+            lv_canvas_draw_text(canvas, CW-36, ty+2, 34, &tdsc2, hdg);
+        }
     }
 }
 
@@ -951,7 +1167,20 @@ FactoryTest::Result FactoryTest::_test_imu()
         snprintf(b, sz, "%c%3d.%1d", neg?'-':'+', iv, fv);
     };
 
-    // ── Step 5: Live view — RAW table (default) or 3D cube (toggle) ──────
+    // ── Warm-start: snap Mahony to accel-derived tilt in ~1 s instead of ~10 s ─
+    // Feed 100 zero-gyro iterations using the corrected accel sample so the
+    // quaternion approaches the true tilt before the live-view starts.
+    // Each step moves the quat by Kp*dt ≈ 0.02 rad; 100 steps covers ~90°.
+    {
+        int16_t ax0, ay0, az0, gx0, gy0, gz0;
+        read_raw(ax0, ay0, az0, gx0, gy0, gz0);
+        float nx = ax0 * ACC_SCALE;
+        float ny = ay0 * ACC_SCALE;
+        float nz = -az0 * ACC_SCALE;   // same Z-inversion as main loop
+        for (int wi = 0; wi < 100; wi++) ahrs.update(0.f, 0.f, 0.f, nx, ny, nz);
+    }
+
+    // ── Step 5: Live view — RAW table (default) or AHRS display (toggle) ─
     constexpr uint16_t TITLE_H = 40;
     constexpr uint16_t BTN_H   = 54;
     constexpr uint16_t BODY_H  = SCREEN_HEIGHT - TITLE_H - BTN_H; // 146
@@ -1042,7 +1271,7 @@ FactoryTest::Result FactoryTest::_test_imu()
         lv_obj_set_style_border_width(tog_btn, 0, 0);
         lv_obj_set_style_radius(tog_btn, 6, 0);
         lv_obj_t *tog_lbl = lv_label_create(tog_btn);
-        lv_label_set_text(tog_lbl, show_3d ? "RAW" : "3D");  // label reflects current mode
+        lv_label_set_text(tog_lbl, show_3d ? "RAW" : "AHRS");  // label reflects current mode
         lv_obj_set_style_text_font(tog_lbl, &lv_font_montserrat_16, 0);
         lv_obj_set_style_text_color(tog_lbl, lv_color_hex(0xFFFFFF), 0);
         lv_obj_center(tog_lbl);
@@ -1077,7 +1306,7 @@ FactoryTest::Result FactoryTest::_test_imu()
 
         float fax = rax * ACC_SCALE;
         float fay = ray * ACC_SCALE;
-        float faz = raz * ACC_SCALE;
+        float faz = -raz * ACC_SCALE;   // QMI8658 Z-axis is physically inverted on this PCB
         float fgx = rgx * GYR_SCALE;
         float fgy = rgy * GYR_SCALE;
         float fgz = rgz * GYR_SCALE;
@@ -1090,22 +1319,10 @@ FactoryTest::Result FactoryTest::_test_imu()
 
         if (LVGL_LOCK(10)) {
             if (show_3d && canvas3d) {
-                // ── 3D cube mode ───────────────────────────────────────────
-                // Physical calibration: swap pitch↔roll, invert yaw
+                // ── AHRS mode ──────────────────────────────────────────────
+                // Physical calibration: IMU pitch/roll axes are swapped
                 Euler e3 = ahrs.euler();
-                float hr = e3.pitch * 0.5f;   // new roll  = physical pitch
-                float hp = e3.roll  * 0.5f;   // new pitch = physical roll
-                float hy = -e3.yaw  * 0.5f;   // invert yaw
-                float cr = cosf(hr), sr = sinf(hr);
-                float cp = cosf(hp), sp = sinf(hp);
-                float cy3 = cosf(hy), sy3 = sinf(hy);
-                Quat q_adj = {
-                    cr*cp*cy3 + sr*sp*sy3,
-                    sr*cp*cy3 - cr*sp*sy3,
-                    cr*sp*cy3 + sr*cp*sy3,
-                    cr*cp*sy3 - sr*sp*cy3
-                };
-                _draw_cube_frame(canvas3d, q_adj);
+                _draw_ahrs_frame(canvas3d, e3.roll, e3.pitch, e3.yaw);
             } else if (!show_3d && tbl_lbl) {
                 // ── RAW table mode ─────────────────────────────────────────
                 Euler e = ahrs.euler();
