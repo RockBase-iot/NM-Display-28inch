@@ -654,23 +654,28 @@ void FactoryTest::_show_summary(const char * const names[], const Result results
     lv_label_set_recolor(body_lbl, true);
     lv_obj_set_style_text_color(body_lbl, lv_color_hex(COLOR_TEXT), 0);
     lv_obj_set_style_text_font(body_lbl, &Inconsolata_16, 0);
-    lv_obj_set_style_text_line_space(body_lbl, 2, 0);
+    lv_obj_set_style_text_line_space(body_lbl, 0, 0);
     lv_obj_set_width(body_lbl, SCREEN_WIDTH - 16);
     lv_label_set_long_mode(body_lbl, LV_LABEL_LONG_WRAP);
-    lv_obj_align(body_lbl, LV_ALIGN_TOP_LEFT, 8, 44);
+    lv_obj_align(body_lbl, LV_ALIGN_TOP_LEFT, 8, 40);
 
-    // ── Bottom hint ───────────────────────────────────────────────────────────
-    lv_obj_t *hint = lv_label_create(scr);
-    lv_label_set_text(hint, "Tap screen to restart");
-    lv_obj_set_style_text_color(hint, lv_color_hex(COLOR_SKIP), 0);
-    lv_obj_set_style_text_font(hint, &lv_font_montserrat_14, 0);
-    lv_obj_align(hint, LV_ALIGN_BOTTOM_MID, 0, -8);
+    // ── Reboot button ─────────────────────────────────────────────────────────
+    _verdict = -1;
+    lv_obj_t *reboot_btn = lv_btn_create(scr);
+    lv_obj_set_size(reboot_btn, SCREEN_WIDTH - 16, 32);
+    lv_obj_align(reboot_btn, LV_ALIGN_BOTTOM_MID, 0, 0);
+    lv_obj_set_style_bg_color(reboot_btn, lv_color_hex(0x2980B9), 0);
+    lv_obj_add_event_cb(reboot_btn, _on_ok_btn, LV_EVENT_CLICKED, this);
+    lv_obj_t *reboot_lbl = lv_label_create(reboot_btn);
+    lv_label_set_text(reboot_lbl, LV_SYMBOL_REFRESH "  Reboot");
+    lv_obj_set_style_text_font(reboot_lbl, &lv_font_montserrat_16, 0);
+    lv_obj_center(reboot_lbl);
 
     lv_scr_load(scr);
     LVGL_UNLOCK();
 
     LOG_I("FactoryTest summary: PASS=%d FAIL=%d SKIP=%d", pass, fail, skip);
-    _wait_touch(60000);
+    while (_verdict < 0) vTaskDelay(pdMS_TO_TICKS(50));
     ESP.restart();
 }
 
@@ -2004,13 +2009,13 @@ FactoryTest::Result FactoryTest::_test_codec()
     Wire.beginTransmission(ES8311_I2C_ADDR);
     Wire.write(0xFD);
     Wire.endTransmission(false);
-    Wire.requestFrom(ES8311_I2C_ADDR, (uint8_t)1);
+    Wire.requestFrom((uint8_t)ES8311_I2C_ADDR, (uint8_t)1);
     uint8_t id0 = Wire.available() ? Wire.read() : 0xFF;
 
     Wire.beginTransmission(ES8311_I2C_ADDR);
     Wire.write(0xFE);
     Wire.endTransmission(false);
-    Wire.requestFrom(ES8311_I2C_ADDR, (uint8_t)1);
+    Wire.requestFrom((uint8_t)ES8311_I2C_ADDR, (uint8_t)1);
     uint8_t id1 = Wire.available() ? Wire.read() : 0xFF;
     bool id_ok  = (id0 == 0x83 && id1 == 0x11);
     LOG_I("[CODEC] ES8311 ID: 0x%02X 0x%02X %s", id0, id1, id_ok ? "OK" : "MISMATCH");
@@ -2040,7 +2045,7 @@ FactoryTest::Result FactoryTest::_test_codec()
         Wire.beginTransmission(ES8311_I2C_ADDR);
         Wire.write(reg);
         Wire.endTransmission(false);
-        Wire.requestFrom(ES8311_I2C_ADDR, (uint8_t)1);
+        Wire.requestFrom((uint8_t)ES8311_I2C_ADDR, (uint8_t)1);
         return Wire.available() ? Wire.read() : 0xFF;
     };
 
@@ -2092,7 +2097,7 @@ FactoryTest::Result FactoryTest::_test_codec()
     codec_wr(0x31, 0x00);  // DAC unmute
     codec_wr(0x37, 0x08);  // DAC ramp rate
     codec_wr(0x45, 0x00);
-    codec_wr(0x32, 0xFF);  // DAC volume max (+32 dB) for tone playback
+    codec_wr(0x32, 0xD3);  // DAC volume ~-22 dB (matches NM-Display-420 T4)
     LOG_I("[CODEC] ES8311 DAC regs: REG00=0x%02X REG0A=0x%02X REG32=0x%02X",
           codec_rd(0x00), codec_rd(0x0A), codec_rd(0x32));
 
@@ -2135,7 +2140,7 @@ FactoryTest::Result FactoryTest::_test_codec()
         }
     }
 
-    // ── Build playback screen: status + PASS/FAIL buttons ────────────────────
+    // ── Build playback screen: status label + PASS/FAIL title bar ────────────
     constexpr uint16_t TITLE_H = 40;
     _verdict = -1;
 
@@ -2147,11 +2152,15 @@ FactoryTest::Result FactoryTest::_test_codec()
         lv_obj_set_style_bg_opa(scr, LV_OPA_COVER, 0);
         lv_obj_clear_flag(scr, LV_OBJ_FLAG_SCROLLABLE);
 
+        // Body: phase + instruction text
         status_lbl = lv_label_create(scr);
         lv_label_set_recolor(status_lbl, true);
         lv_obj_set_style_text_color(status_lbl, lv_color_hex(COLOR_TEXT), 0);
         lv_obj_set_style_text_font(status_lbl, &lv_font_montserrat_16, 0);
-        lv_label_set_text(status_lbl, "Playing 1kHz tone...\nDo you hear audio?");
+        lv_label_set_text(status_lbl,
+            "PA Amp: ON\n"
+            "Phase: SWEEP (500~4kHz)\n"
+            "#BDC3C7 Tap OK / Failed when done#");
         lv_obj_set_width(status_lbl, SCREEN_WIDTH - 20);
         lv_label_set_long_mode(status_lbl, LV_LABEL_LONG_WRAP);
         lv_obj_align(status_lbl, LV_ALIGN_CENTER, 0, 10);
@@ -2164,15 +2173,9 @@ FactoryTest::Result FactoryTest::_test_codec()
         lv_obj_set_style_bg_opa(tb, LV_OPA_COVER, 0);
         lv_obj_set_style_border_width(tb, 0, 0);
         lv_obj_set_style_radius(tb, 0, 0);
+        lv_obj_set_style_pad_all(tb, 0, 0);
         lv_obj_clear_flag(tb, LV_OBJ_FLAG_SCROLLABLE);
 
-        lv_obj_t *tb_title = lv_label_create(tb);
-        lv_obj_set_style_text_color(tb_title, lv_color_hex(COLOR_TEXT), 0);
-        lv_obj_set_style_text_font(tb_title, &lv_font_montserrat_16, 0);
-        lv_label_set_text(tb_title, "Test 9/10: Codec (ES8311)");
-        lv_obj_align(tb_title, LV_ALIGN_CENTER, 0, 0);
-
-        // FAIL button (left)
         lv_obj_t *tb_fail = lv_btn_create(tb);
         lv_obj_set_size(tb_fail, 105, 30);
         lv_obj_align(tb_fail, LV_ALIGN_LEFT_MID, 2, 0);
@@ -2182,7 +2185,6 @@ FactoryTest::Result FactoryTest::_test_codec()
         lv_label_set_text(tb_fl, LV_SYMBOL_CLOSE " Failed");
         lv_obj_center(tb_fl);
 
-        // PASS button (right)
         lv_obj_t *tb_pass = lv_btn_create(tb);
         lv_obj_set_size(tb_pass, 193, 30);
         lv_obj_align(tb_pass, LV_ALIGN_RIGHT_MID, -2, 0);
@@ -2196,32 +2198,113 @@ FactoryTest::Result FactoryTest::_test_codec()
         LVGL_UNLOCK();
     }
 
-    // ── Enable PA amplifier ─────────────────────────────────────────────────
+    // ── Enable PA amplifier ───────────────────────────────────────────────────
     tca_pa_ctrl(true);
     vTaskDelay(pdMS_TO_TICKS(50));   // let PA settle before audio
 
-    // ── Generate 1kHz sine wave and stream continuously until verdict ─────────
-    // Chunk = 256 stereo frames = 1024 bytes ≈ 16 ms @ 16 kHz
-    constexpr int     CHUNK_FRAMES = 256;
-    constexpr int     SR           = I2S_SAMPLE_RATE;
-    constexpr float   FREQ_HZ      = 1000.0f;
-    constexpr int16_t AMPLITUDE    = 12000;
-    constexpr float   PHASE_INC    = 2.0f * (float)M_PI * FREQ_HZ / (float)SR;
+    // ── Audio playback: sweep + Ode to Joy (mirrors NM-Display-420 T4) ───────
+    // Buffer: 512 stereo frames (legacy driver chunk size)
+    constexpr int      BUF_FRAMES  = 512;
+    constexpr uint32_t CODEC_SR    = I2S_SAMPLE_RATE;  // 16000 Hz
+    constexpr int16_t  AMPLITUDE   = 16000;             // full scale; DAC vol reg 0xD3 controls loudness
 
-    static int16_t tone_buf[CHUNK_FRAMES * 2];  // static: no stack pressure
-    float phase = 0.0f;
+    // Note table
+    struct CodecNote { float freq; uint16_t ms; };
+    constexpr float NOTE_C = 261.63f, NOTE_D = 293.66f, NOTE_E = 329.63f;
+    constexpr float NOTE_F = 349.23f, NOTE_G = 392.00f;
+    constexpr uint16_t Q=300, DQ=450, E8=150, H=600;
 
-    while (_verdict < 0) {
-        // Fill chunk with 1kHz sine (stereo L=R)
-        for (int i = 0; i < CHUNK_FRAMES; i++) {
-            int16_t s = (int16_t)(AMPLITUDE * sinf(phase));
-            tone_buf[i * 2]     = s;
-            tone_buf[i * 2 + 1] = s;
-            phase += PHASE_INC;
-            if (phase >= 2.0f * (float)M_PI) phase -= 2.0f * (float)M_PI;
+    static const CodecNote odeToJoy[] = {
+        { NOTE_E, Q }, { NOTE_E, Q }, { NOTE_F, Q }, { NOTE_G, Q },
+        { NOTE_G, Q }, { NOTE_F, Q }, { NOTE_E, Q }, { NOTE_D, Q },
+        { NOTE_C, Q }, { NOTE_C, Q }, { NOTE_D, Q }, { NOTE_E, Q },
+        { NOTE_E, DQ },{ NOTE_D, E8 },{ NOTE_D, H  },
+        { NOTE_E, Q }, { NOTE_E, Q }, { NOTE_F, Q }, { NOTE_G, Q },
+        { NOTE_G, Q }, { NOTE_F, Q }, { NOTE_E, Q }, { NOTE_D, Q },
+        { NOTE_C, Q }, { NOTE_C, Q }, { NOTE_D, Q }, { NOTE_E, Q },
+        { NOTE_D, DQ },{ NOTE_C, E8 },{ NOTE_C, H  },
+    };
+    constexpr int nMelody = sizeof(odeToJoy) / sizeof(odeToJoy[0]);
+
+    static const float sweepFreqs[] = { 500.0f, 1000.0f, 2000.0f, 3000.0f, 4000.0f };
+    constexpr int nSweep = sizeof(sweepFreqs) / sizeof(sweepFreqs[0]);
+
+    static int16_t tone_buf[BUF_FRAMES * 2];  // stereo interleaved, static = no stack
+    uint32_t osc_phase = 0;  // persistent oscillator phase across chunks
+
+    // Helper: update status label (requires LVGL lock)
+    auto set_phase_label = [&](const char *txt) {
+        if (status_lbl && LVGL_LOCK(50)) {
+            lv_label_set_text(status_lbl, txt);
+            LVGL_UNLOCK();
         }
-        size_t bw = 0;
-        i2s_write(I2S_NUM_0, tone_buf, sizeof(tone_buf), &bw, pdMS_TO_TICKS(50));
+    };
+
+    // Helper: play `freq` Hz for `dur_ms` ms with linear attack/release envelope.
+    // Returns true if _verdict was set (user tapped a button).
+    auto play_tone = [&](float freq, uint32_t dur_ms) -> bool {
+        uint32_t total = (uint32_t)((uint64_t)CODEC_SR * dur_ms / 1000ULL);
+        const uint32_t attackN  = CODEC_SR * 8  / 1000;   //  8 ms fade-in
+        const uint32_t releaseN = CODEC_SR * 25 / 1000;   // 25 ms fade-out
+        const float twoPi_f_Fs  = 2.0f * (float)M_PI * freq / (float)CODEC_SR;
+        uint32_t written = 0;
+
+        while (written < total && _verdict < 0) {
+            uint32_t chunk = BUF_FRAMES;
+            if (written + chunk > total) chunk = total - written;
+
+            for (uint32_t i = 0; i < chunk; i++) {
+                uint32_t n = written + i;
+                float env = 1.0f;
+                if (n < attackN)
+                    env = (float)n / (float)attackN;
+                else if (n + releaseN > total) {
+                    uint32_t left = total - n;
+                    env = (float)left / (float)releaseN;
+                    if (env < 0.0f) env = 0.0f;
+                }
+                int16_t s = (int16_t)(AMPLITUDE * env *
+                                      sinf(twoPi_f_Fs * (float)osc_phase));
+                osc_phase++;
+                tone_buf[i * 2]     = s;
+                tone_buf[i * 2 + 1] = s;
+            }
+            size_t bw = 0;
+            i2s_write(I2S_NUM_0, tone_buf, chunk * 4, &bw, pdMS_TO_TICKS(200));
+            written += chunk;
+        }
+        osc_phase = 0;  // reset phase at note boundary to avoid DC click
+        return (_verdict >= 0);
+    };
+
+    // ── Main loop: sweep then OdeToJoy, repeat until user taps a button ──────
+    while (_verdict < 0) {
+        // Phase A: frequency sweep 500 Hz → 4 kHz (1 s each)
+        set_phase_label(
+            "PA Amp: ON\n"
+            "Phase: SWEEP (500~4kHz)\n"
+            "#BDC3C7 Tap OK / Failed when done#");
+        LOG_I("[CODEC] Sweep start");
+        for (int i = 0; i < nSweep && _verdict < 0; i++) {
+            LOG_I("[CODEC] Sweep %.0f Hz", sweepFreqs[i]);
+            if (play_tone(sweepFreqs[i], 1000)) break;
+        }
+
+        // Phase B: Ode to Joy (~19.2 s, loops back if finished before verdict)
+        if (_verdict < 0) {
+            set_phase_label(
+                "PA Amp: ON\n"
+                "Tune: Ode to Joy\n"
+                "#BDC3C7 Tap OK / Failed when done#");
+            LOG_I("[CODEC] Ode to Joy start");
+            uint32_t t0 = millis();
+            int ni = 0;
+            while (_verdict < 0 && (millis() - t0) < 20000UL) {
+                if (play_tone(odeToJoy[ni].freq, odeToJoy[ni].ms)) break;
+                ni = (ni + 1) % nMelody;
+            }
+            LOG_I("[CODEC] Ode to Joy end (%lu ms)", (unsigned long)(millis() - t0));
+        }
     }
 
     // ── Cleanup ───────────────────────────────────────────────────────────────
@@ -2267,7 +2350,7 @@ FactoryTest::Result FactoryTest::_test_mic()
         Wire.beginTransmission(ES8311_I2C_ADDR);
         Wire.write(reg);
         Wire.endTransmission(false);
-        Wire.requestFrom(ES8311_I2C_ADDR, (uint8_t)1);
+        Wire.requestFrom((uint8_t)ES8311_I2C_ADDR, (uint8_t)1);
         return Wire.available() ? Wire.read() : 0xFF;
     };
 
@@ -2329,7 +2412,7 @@ FactoryTest::Result FactoryTest::_test_mic()
     codec_wr(0x31, 0x00);  // DAC unmute
     codec_wr(0x37, 0x08);  // DAC ramp rate
     codec_wr(0x45, 0x00);
-    codec_wr(0x32, 0xFF);  // DAC volume max (+32 dB)
+    codec_wr(0x32, 0xD3);  // DAC volume ~-22 dB (matches NM-Display-420 T4)
     LOG_I("[AUDIO] ES8311 regs written. REG00=0x%02X REG01=0x%02X REG09=0x%02X",
           codec_rd(0x00), codec_rd(0x01), codec_rd(0x09));
 
@@ -2404,7 +2487,6 @@ FactoryTest::Result FactoryTest::_test_mic()
         lv_obj_set_size(record_btn, 150, 46);
         lv_obj_align(record_btn, LV_ALIGN_CENTER, 0, 28);
         lv_obj_set_style_bg_color(record_btn, lv_color_hex(0xC0392B), 0);
-        lv_obj_set_style_radius(record_btn, 10, 0);
         lv_obj_add_event_cb(record_btn, [](lv_event_t *e) {
             if (lv_event_get_code(e) != LV_EVENT_CLICKED) return;
             static_cast<RecCtx *>(lv_event_get_user_data(e))->clicked = true;
@@ -2423,6 +2505,7 @@ FactoryTest::Result FactoryTest::_test_mic()
         lv_obj_set_style_bg_opa(tb, LV_OPA_COVER, 0);
         lv_obj_set_style_border_width(tb, 0, 0);
         lv_obj_set_style_radius(tb, 0, 0);
+        lv_obj_set_style_pad_all(tb, 0, 0);   // zero padding → buttons won't overlap
         lv_obj_clear_flag(tb, LV_OBJ_FLAG_SCROLLABLE);
 
         lv_obj_t *tb_fail = lv_btn_create(tb);
@@ -2431,7 +2514,7 @@ FactoryTest::Result FactoryTest::_test_mic()
         lv_obj_set_style_bg_color(tb_fail, lv_color_hex(COLOR_FAIL), 0);
         lv_obj_add_event_cb(tb_fail, _on_fail_btn, LV_EVENT_ALL, this);
         lv_obj_t *tb_fl = lv_label_create(tb_fail);
-        lv_label_set_text(tb_fl, "FAIL");
+        lv_label_set_text(tb_fl, LV_SYMBOL_CLOSE " Failed");
         lv_obj_center(tb_fl);
 
         lv_obj_t *tb_pass = lv_btn_create(tb);
@@ -2440,7 +2523,7 @@ FactoryTest::Result FactoryTest::_test_mic()
         lv_obj_set_style_bg_color(tb_pass, lv_color_hex(COLOR_PASS), 0);
         lv_obj_add_event_cb(tb_pass, _on_ok_btn, LV_EVENT_ALL, this);
         lv_obj_t *tb_pl = lv_label_create(tb_pass);
-        lv_label_set_text(tb_pl, "PASS");
+        lv_label_set_text(tb_pl, LV_SYMBOL_OK " Ok");
         lv_obj_center(tb_pl);
 
         lv_scr_load(scr);
