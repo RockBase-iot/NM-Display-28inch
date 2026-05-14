@@ -45,9 +45,16 @@ void FactoryTest::_on_fail_btn(lv_event_t *e)
 // _test_imu() returns.
 struct ImuToggleCtx {
     volatile bool *show_3d;
-    lv_obj_t      *toggle_lbl;   // label on the toggle button
-    lv_obj_t      *canvas;       // 3D canvas widget
-    lv_obj_t      *tbl_panel;    // raw-data text panel
+    lv_obj_t      *canvas;         // AHRS canvas widget
+    lv_obj_t      *tbl_panel;      // raw-data text panel
+    // Title bar elements
+    lv_obj_t      *tb_title_lbl;   // title text (visible in RAW, hidden in AHRS)
+    lv_obj_t      *tb_tog_btn;     // compact toggle btn in title bar (AHRS only)
+    lv_obj_t      *tb_tog_lbl;     // its label
+    lv_obj_t      *tb_pass_btn;    // compact PASS btn in title bar (AHRS only)
+    // Bottom row elements
+    lv_obj_t      *bot_row;        // bottom row container (RAW only)
+    lv_obj_t      *bot_tog_lbl;    // bottom toggle button label
 };
 
 void FactoryTest::_on_imu_toggle_btn(lv_event_t *e)
@@ -56,13 +63,25 @@ void FactoryTest::_on_imu_toggle_btn(lv_event_t *e)
     auto *ctx = static_cast<ImuToggleCtx *>(lv_event_get_user_data(e));
     bool new3d = !(*ctx->show_3d);
     *ctx->show_3d = new3d;
-    lv_label_set_text(ctx->toggle_lbl, new3d ? "RAW" : "AHRS");
+    const char *tog_txt = new3d ? "RAW" : "AHRS";
+    lv_label_set_text(ctx->tb_tog_lbl,  tog_txt);
+    lv_label_set_text(ctx->bot_tog_lbl, tog_txt);
     if (new3d) {
-        lv_obj_add_flag  (ctx->tbl_panel, LV_OBJ_FLAG_HIDDEN);
-        lv_obj_clear_flag(ctx->canvas,    LV_OBJ_FLAG_HIDDEN);
+        // → AHRS mode: canvas full-height, compact buttons move to title bar
+        lv_obj_add_flag  (ctx->tbl_panel,    LV_OBJ_FLAG_HIDDEN);
+        lv_obj_clear_flag(ctx->canvas,       LV_OBJ_FLAG_HIDDEN);
+        lv_obj_add_flag  (ctx->tb_title_lbl, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_clear_flag(ctx->tb_tog_btn,   LV_OBJ_FLAG_HIDDEN);
+        lv_obj_clear_flag(ctx->tb_pass_btn,  LV_OBJ_FLAG_HIDDEN);
+        lv_obj_add_flag  (ctx->bot_row,      LV_OBJ_FLAG_HIDDEN);
     } else {
-        lv_obj_clear_flag(ctx->tbl_panel, LV_OBJ_FLAG_HIDDEN);
-        lv_obj_add_flag  (ctx->canvas,    LV_OBJ_FLAG_HIDDEN);
+        // → RAW mode: table visible, title text restored, buttons at bottom
+        lv_obj_clear_flag(ctx->tbl_panel,    LV_OBJ_FLAG_HIDDEN);
+        lv_obj_add_flag  (ctx->canvas,       LV_OBJ_FLAG_HIDDEN);
+        lv_obj_clear_flag(ctx->tb_title_lbl, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_add_flag  (ctx->tb_tog_btn,   LV_OBJ_FLAG_HIDDEN);
+        lv_obj_add_flag  (ctx->tb_pass_btn,  LV_OBJ_FLAG_HIDDEN);
+        lv_obj_clear_flag(ctx->bot_row,      LV_OBJ_FLAG_HIDDEN);
     }
 }
 
@@ -81,8 +100,8 @@ void FactoryTest::_on_imu_toggle_btn(lv_event_t *e)
 static void _draw_ahrs_frame(lv_obj_t *canvas, float roll, float pitch, float yaw)
 {
     constexpr int  CW     = SCREEN_WIDTH;            // 320
-    constexpr int  CH     = SCREEN_HEIGHT - 40 - 54; // 146
-    constexpr int  YAW_H  = 26;                      // yaw tape height (bottom)
+    constexpr int  CH     = SCREEN_HEIGHT - 40;      // 200 (no bottom row in AHRS mode)
+    constexpr int  YAW_H  = 13;                      // yaw tape height (bottom)
     constexpr int  MAIN_H = CH - YAW_H;              // 120
     const float    cx     = CW   * 0.5f;             // 160
     const float    cy_m   = MAIN_H * 0.5f;           // 60
@@ -305,7 +324,7 @@ static void _draw_ahrs_frame(lv_obj_t *canvas, float roll, float pitch, float ya
             int hnorm = ((hi % 360) + 360) % 360;
             bool is_card  = (hnorm % 90 == 0);
             bool is_icard = (hnorm % 45 == 0 && !is_card);
-            int tick_h = is_card ? 10 : (is_icard ? 7 : 4);
+            int tick_h = is_card ? 6 : (is_icard ? 4 : 2);
             ldsc.color = is_card  ? lv_color_hex(0xFFFFFF) :
                          is_icard ? lv_color_hex(0xBBBBBB) : lv_color_hex(0x555555);
             lv_point_t tick[2] = {
@@ -325,17 +344,17 @@ static void _draw_ahrs_frame(lv_obj_t *canvas, float roll, float pitch, float ya
                     int lw = (strlen(lbl)==1) ? 11 : 20;
                     tdsc.color = is_card ? lv_color_hex(0xFFFFFF) : lv_color_hex(0xBBBBBB);
                     lv_canvas_draw_text(canvas,
-                        (lv_coord_t)roundf(sx) - lw/2, ty+2,
+                        (lv_coord_t)roundf(sx) - lw/2, ty,
                         (lv_coord_t)(lw+2), &tdsc, lbl);
                 }
             }
         }
-        // Current heading (3 digits, gold, right side of tape)
+        // Current heading (3 digits, gold, centred below the pointer)
         {
             char hdg[5]; snprintf(hdg, sizeof(hdg), "%03d", ((int)roundf(yaw_deg)) % 360);
             lv_draw_label_dsc_t tdsc2; lv_draw_label_dsc_init(&tdsc2);
             tdsc2.color = lv_color_hex(0xFFD700); tdsc2.font = &lv_font_montserrat_14;
-            lv_canvas_draw_text(canvas, CW-36, ty+2, 34, &tdsc2, hdg);
+            lv_canvas_draw_text(canvas, CW/2 - 16, ty, 34, &tdsc2, hdg);
         }
     }
 }
@@ -1131,7 +1150,7 @@ FactoryTest::Result FactoryTest::_test_imu()
     // 100 samples × 20 ms = 2 s
     constexpr uint16_t CALIB_N = 100;
     ImuBias  bias(CALIB_N);
-    MahonyAHRS ahrs(1.0f, 0.005f, 0.02f);  // Kp, Ki, dt_s
+    MahonyAHRS ahrs(2.0f, 0.005f, 0.02f);  // Kp=2 faster settling, Ki, nominal dt_s
 
     {
         char prog[64];
@@ -1183,10 +1202,11 @@ FactoryTest::Result FactoryTest::_test_imu()
     // ── Step 5: Live view — RAW table (default) or AHRS display (toggle) ─
     constexpr uint16_t TITLE_H = 40;
     constexpr uint16_t BTN_H   = 54;
-    constexpr uint16_t BODY_H  = SCREEN_HEIGHT - TITLE_H - BTN_H; // 146
+    constexpr uint16_t BODY_H  = SCREEN_HEIGHT - TITLE_H - BTN_H; // 146 (RAW table height)
+    constexpr uint16_t AHRS_H  = SCREEN_HEIGHT - TITLE_H;          // 200 (AHRS canvas height)
 
-    // Allocate 3D canvas pixel buffer from PSRAM (~91 KB for 320×146 RGB565)
-    const size_t cbuf_sz = LV_CANVAS_BUF_SIZE_TRUE_COLOR(SCREEN_WIDTH, BODY_H);
+    // Allocate AHRS canvas pixel buffer from PSRAM (320×200 RGB565 ≈ 125 KB)
+    const size_t cbuf_sz = LV_CANVAS_BUF_SIZE_TRUE_COLOR(SCREEN_WIDTH, AHRS_H);
     auto *cbuf3d = static_cast<lv_color_t *>(
         heap_caps_malloc(cbuf_sz, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
 
@@ -1220,13 +1240,46 @@ FactoryTest::Result FactoryTest::_test_imu()
         lv_obj_set_style_radius(tb, 0, 0);
         lv_obj_set_style_pad_all(tb, 4, 0);
         lv_obj_clear_flag(tb, LV_OBJ_FLAG_SCROLLABLE);
+
+        // Title text — visible in RAW mode, hidden in AHRS mode
         lv_obj_t *tb_lbl = lv_label_create(tb);
         lv_label_set_text(tb_lbl, "Test 5/9: IMU (QMI8658)");
         lv_obj_set_style_text_color(tb_lbl, lv_color_hex(COLOR_TEXT), 0);
         lv_obj_set_style_text_font(tb_lbl, &lv_font_montserrat_16, 0);
         lv_obj_center(tb_lbl);
+        if (show_3d) lv_obj_add_flag(tb_lbl, LV_OBJ_FLAG_HIDDEN);
 
-        // ── RAW table panel (default: hidden when 3D mode is active) ───────────
+        // ── Compact buttons in title bar (AHRS mode only) ─────────────────────────
+        lv_obj_t *tb_tog_btn = lv_btn_create(tb);
+        lv_obj_set_size(tb_tog_btn, 72, 30);
+        lv_obj_align(tb_tog_btn, LV_ALIGN_LEFT_MID, 2, 0);
+        lv_obj_set_style_bg_color(tb_tog_btn, lv_color_hex(0x2980B9), 0);
+        lv_obj_set_style_bg_color(tb_tog_btn, lv_color_hex(0x1F618D), LV_STATE_PRESSED);
+        lv_obj_set_style_border_width(tb_tog_btn, 0, 0);
+        lv_obj_set_style_radius(tb_tog_btn, 6, 0);
+        lv_obj_t *tb_tog_lbl = lv_label_create(tb_tog_btn);
+        lv_label_set_text(tb_tog_lbl, show_3d ? "RAW" : "AHRS");
+        lv_obj_set_style_text_font(tb_tog_lbl, &lv_font_montserrat_14, 0);
+        lv_obj_set_style_text_color(tb_tog_lbl, lv_color_hex(0xFFFFFF), 0);
+        lv_obj_center(tb_tog_lbl);
+        if (!show_3d) lv_obj_add_flag(tb_tog_btn, LV_OBJ_FLAG_HIDDEN);
+
+        lv_obj_t *tb_pass_btn = lv_btn_create(tb);
+        lv_obj_set_size(tb_pass_btn, 188, 30);
+        lv_obj_align(tb_pass_btn, LV_ALIGN_RIGHT_MID, -2, 0);
+        lv_obj_set_style_bg_color(tb_pass_btn, lv_color_hex(COLOR_PASS), 0);
+        lv_obj_set_style_bg_color(tb_pass_btn, lv_color_hex(0x27AE60), LV_STATE_PRESSED);
+        lv_obj_set_style_border_width(tb_pass_btn, 0, 0);
+        lv_obj_set_style_radius(tb_pass_btn, 6, 0);
+        lv_obj_add_event_cb(tb_pass_btn, _on_ok_btn, LV_EVENT_CLICKED, this);
+        lv_obj_t *tb_pass_lbl = lv_label_create(tb_pass_btn);
+        lv_label_set_text(tb_pass_lbl, LV_SYMBOL_OK "  PASS >> Continue");
+        lv_obj_set_style_text_font(tb_pass_lbl, &lv_font_montserrat_14, 0);
+        lv_obj_set_style_text_color(tb_pass_lbl, lv_color_hex(0xFFFFFF), 0);
+        lv_obj_center(tb_pass_lbl);
+        if (!show_3d) lv_obj_add_flag(tb_pass_btn, LV_OBJ_FLAG_HIDDEN);
+
+        // ── RAW table panel (hidden when AHRS mode is active) ───────────
         tbl_panel = lv_obj_create(scr);
         lv_obj_set_size(tbl_panel, SCREEN_WIDTH, BODY_H);
         lv_obj_set_pos(tbl_panel, 0, TITLE_H);
@@ -1250,57 +1303,79 @@ FactoryTest::Result FactoryTest::_test_imu()
         lv_label_set_long_mode(tbl_lbl, LV_LABEL_LONG_WRAP);
         lv_obj_align(tbl_lbl, LV_ALIGN_TOP_LEFT, 0, 0);
 
-        // ── 3D canvas (initially hidden) ─────────────────────────────────────
+        // ── AHRS canvas (full height below title bar, 200 px) ─────────────────
         if (cbuf3d) {
             canvas3d = lv_canvas_create(scr);
-            lv_canvas_set_buffer(canvas3d, cbuf3d, SCREEN_WIDTH, BODY_H,
+            lv_canvas_set_buffer(canvas3d, cbuf3d, SCREEN_WIDTH, AHRS_H,
                                  LV_IMG_CF_TRUE_COLOR);
             lv_obj_set_pos(canvas3d, 0, TITLE_H);
             lv_canvas_fill_bg(canvas3d, lv_color_hex(0x0D1A30), LV_OPA_COVER);
-            // Visible by default (we start in 3D mode); hidden only if fallback to RAW
             if (!show_3d) lv_obj_add_flag(canvas3d, LV_OBJ_FLAG_HIDDEN);
         }
 
-        // ── Bottom button row: [3D 80px] [gap 8px] [PASS >> Continue 216px] ─
-        // Toggle button (left, blue)
-        lv_obj_t *tog_btn = lv_btn_create(scr);
-        lv_obj_set_size(tog_btn, 80, 44);
-        lv_obj_align(tog_btn, LV_ALIGN_BOTTOM_LEFT, 8, -6);
-        lv_obj_set_style_bg_color(tog_btn, lv_color_hex(0x2980B9), 0);
-        lv_obj_set_style_bg_color(tog_btn, lv_color_hex(0x1F618D), LV_STATE_PRESSED);
-        lv_obj_set_style_border_width(tog_btn, 0, 0);
-        lv_obj_set_style_radius(tog_btn, 6, 0);
-        lv_obj_t *tog_lbl = lv_label_create(tog_btn);
-        lv_label_set_text(tog_lbl, show_3d ? "RAW" : "AHRS");  // label reflects current mode
-        lv_obj_set_style_text_font(tog_lbl, &lv_font_montserrat_16, 0);
-        lv_obj_set_style_text_color(tog_lbl, lv_color_hex(0xFFFFFF), 0);
-        lv_obj_center(tog_lbl);
+        // ── Bottom button row container (RAW mode only) ───────────────────────
+        lv_obj_t *bot_row = lv_obj_create(scr);
+        lv_obj_set_size(bot_row, SCREEN_WIDTH, BTN_H);
+        lv_obj_align(bot_row, LV_ALIGN_BOTTOM_MID, 0, 0);
+        lv_obj_set_style_bg_color(bot_row, lv_color_hex(COLOR_BG), 0);
+        lv_obj_set_style_bg_opa(bot_row, LV_OPA_COVER, 0);
+        lv_obj_set_style_border_width(bot_row, 0, 0);
+        lv_obj_set_style_radius(bot_row, 0, 0);
+        lv_obj_set_style_pad_all(bot_row, 0, 0);
+        lv_obj_clear_flag(bot_row, LV_OBJ_FLAG_SCROLLABLE);
+        if (show_3d) lv_obj_add_flag(bot_row, LV_OBJ_FLAG_HIDDEN);
 
-        toggle_ctx = {&show_3d, tog_lbl, canvas3d, tbl_panel};
-        lv_obj_add_event_cb(tog_btn, _on_imu_toggle_btn, LV_EVENT_CLICKED, &toggle_ctx);
+        // Toggle button (bottom-left, blue)
+        lv_obj_t *bot_tog_btn = lv_btn_create(bot_row);
+        lv_obj_set_size(bot_tog_btn, 80, 44);
+        lv_obj_align(bot_tog_btn, LV_ALIGN_LEFT_MID, 8, 0);
+        lv_obj_set_style_bg_color(bot_tog_btn, lv_color_hex(0x2980B9), 0);
+        lv_obj_set_style_bg_color(bot_tog_btn, lv_color_hex(0x1F618D), LV_STATE_PRESSED);
+        lv_obj_set_style_border_width(bot_tog_btn, 0, 0);
+        lv_obj_set_style_radius(bot_tog_btn, 6, 0);
+        lv_obj_t *bot_tog_lbl = lv_label_create(bot_tog_btn);
+        lv_label_set_text(bot_tog_lbl, show_3d ? "RAW" : "AHRS");
+        lv_obj_set_style_text_font(bot_tog_lbl, &lv_font_montserrat_16, 0);
+        lv_obj_set_style_text_color(bot_tog_lbl, lv_color_hex(0xFFFFFF), 0);
+        lv_obj_center(bot_tog_lbl);
 
-        // PASS button (right, green)
+        // PASS button (bottom-right, green)
         _verdict = -1;
-        lv_obj_t *pass_btn = lv_btn_create(scr);
-        lv_obj_set_size(pass_btn, 216, 44);
-        lv_obj_align(pass_btn, LV_ALIGN_BOTTOM_RIGHT, -8, -6);
-        lv_obj_set_style_bg_color(pass_btn, lv_color_hex(COLOR_PASS), 0);
-        lv_obj_set_style_bg_color(pass_btn, lv_color_hex(0x27AE60), LV_STATE_PRESSED);
-        lv_obj_set_style_border_width(pass_btn, 0, 0);
-        lv_obj_set_style_radius(pass_btn, 6, 0);
-        lv_obj_add_event_cb(pass_btn, _on_ok_btn, LV_EVENT_CLICKED, this);
-        lv_obj_t *pass_lbl = lv_label_create(pass_btn);
-        lv_label_set_text(pass_lbl, LV_SYMBOL_OK "  PASS >> Continue");
-        lv_obj_set_style_text_font(pass_lbl, &lv_font_montserrat_16, 0);
-        lv_obj_set_style_text_color(pass_lbl, lv_color_hex(0xFFFFFF), 0);
-        lv_obj_center(pass_lbl);
+        lv_obj_t *bot_pass_btn = lv_btn_create(bot_row);
+        lv_obj_set_size(bot_pass_btn, 216, 44);
+        lv_obj_align(bot_pass_btn, LV_ALIGN_RIGHT_MID, -8, 0);
+        lv_obj_set_style_bg_color(bot_pass_btn, lv_color_hex(COLOR_PASS), 0);
+        lv_obj_set_style_bg_color(bot_pass_btn, lv_color_hex(0x27AE60), LV_STATE_PRESSED);
+        lv_obj_set_style_border_width(bot_pass_btn, 0, 0);
+        lv_obj_set_style_radius(bot_pass_btn, 6, 0);
+        lv_obj_add_event_cb(bot_pass_btn, _on_ok_btn, LV_EVENT_CLICKED, this);
+        lv_obj_t *bot_pass_lbl = lv_label_create(bot_pass_btn);
+        lv_label_set_text(bot_pass_lbl, LV_SYMBOL_OK "  PASS >> Continue");
+        lv_obj_set_style_text_font(bot_pass_lbl, &lv_font_montserrat_16, 0);
+        lv_obj_set_style_text_color(bot_pass_lbl, lv_color_hex(0xFFFFFF), 0);
+        lv_obj_center(bot_pass_lbl);
+
+        toggle_ctx = {&show_3d, canvas3d, tbl_panel,
+                      tb_lbl, tb_tog_btn, tb_tog_lbl, tb_pass_btn,
+                      bot_row, bot_tog_lbl};
+        lv_obj_add_event_cb(tb_tog_btn,  _on_imu_toggle_btn, LV_EVENT_CLICKED, &toggle_ctx);
+        lv_obj_add_event_cb(bot_tog_btn, _on_imu_toggle_btn, LV_EVENT_CLICKED, &toggle_ctx);
 
         lv_scr_load(scr);
     }
     LVGL_UNLOCK();
 
-    // ── Main refresh loop (20 ms) ──────────────────────────────────────────
+    // ── Main refresh loop ─────────────────────────────────────────────────
+    // Track actual elapsed time so the Mahony gyro integration is correct even
+    // when the AHRS canvas rendering takes longer than the nominal 20 ms tick.
+    uint32_t last_imu_ms = millis();
     while (_verdict < 0) {
+        uint32_t now_ms = millis();
+        float dt_scale = (float)(now_ms - last_imu_ms) * (1.0f / 20.0f);
+        last_imu_ms = now_ms;
+        if (dt_scale < 0.5f) dt_scale = 0.5f;   // never collapse to near-zero
+        if (dt_scale > 5.0f) dt_scale = 5.0f;   // ignore stale/first-run spike
+
         int16_t rax, ray, raz, rgx, rgy, rgz;
         read_raw(rax, ray, raz, rgx, rgy, rgz);
 
@@ -1312,12 +1387,19 @@ FactoryTest::Result FactoryTest::_test_imu()
         float fgz = rgz * GYR_SCALE;
 
         // Bias-corrected Mahony update
+        // Scale gyro by actual/nominal dt ratio so the integration tracks real time.
         float bgx = fgx, bgy = fgy, bgz = fgz;
         bias.apply(bgx, bgy, bgz);
-        ahrs.update(bgx * kDeg2Rad, bgy * kDeg2Rad, bgz * kDeg2Rad,
+        // PCB mounts the QMI8658 rotated 180° around Z: physical X/Y gyro axes
+        // are both flipped relative to the Mahony frame.  Negate gx and gy so
+        // the gyro integration drives pitch/roll in the correct direction.
+        // gz (yaw) is unaffected.
+        ahrs.update(-bgx * kDeg2Rad * dt_scale,
+                    -bgy * kDeg2Rad * dt_scale,
+                     bgz * kDeg2Rad * dt_scale,
                     fax, fay, faz);
 
-        if (LVGL_LOCK(10)) {
+        if (LVGL_LOCK(0)) {   // non-blocking: skip render frame if LVGL is busy
             if (show_3d && canvas3d) {
                 // ── AHRS mode ──────────────────────────────────────────────
                 // Physical calibration: IMU pitch/roll axes are swapped
