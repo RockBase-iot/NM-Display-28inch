@@ -3,6 +3,8 @@
 #include "../../utils/logger.h"
 #include "../../drivers/display/lvgl_port.h"
 #include "../../bsp/nm_display_28/config.h"
+#include "../../alg/quaternion/mahony.h"
+#include "../../alg/quaternion/imu_bias.h"
 
 #include <lvgl.h>
 #include <esp_heap_caps.h>
@@ -790,69 +792,131 @@ FactoryTest::Result FactoryTest::_test_imu()
     };
 
     write_reg(0x02, 0x60);   // CTRL1: auto-increment, little-endian output
-    write_reg(0x03, 0x25);   // CTRL2: Accel ±8g (aFS=010), ODR=500Hz (0101)
-    write_reg(0x04, 0x55);   // CTRL3: Gyro ±512dps (gFS=101), ODR=500Hz (0101)
+    write_reg(0x03, 0x25);   // CTRL2: Accel ±8g (aFS=010), ODR=500Hz
+    write_reg(0x04, 0x55);   // CTRL3: Gyro ±512dps (gFS=101), ODR=500Hz
     write_reg(0x08, 0x03);   // CTRL7: AccEn | GyrEn
     vTaskDelay(pdMS_TO_TICKS(50));
 
     // ±8g  → 32768/8  = 4096 LSB/g  → scale = 1/4096
     // ±512dps → 32768/512 = 64 LSB/dps → scale = 1/64
-    constexpr float ACC_SCALE = 1.0f / 4096.0f;
-    constexpr float GYR_SCALE = 1.0f / 64.0f;
+    constexpr float ACC_SCALE  = 1.0f / 4096.0f;      // LSB → g
+    constexpr float GYR_SCALE  = 1.0f / 64.0f;        // LSB → dps
+    // DEG_TO_RAD / RAD_TO_DEG are already defined as macros in Arduino.h
+    constexpr float kDeg2Rad = 0.017453293f;
+    constexpr float kRad2Deg = 57.295779f;
 
-    // Float formatter: outputs ±NNN.NNN (8 chars, no unit), avoids %f.
-    auto fmt8 = [](char *b, int sz, float v) {
-        bool neg = (v < 0.0f);
-        float av = neg ? -v : v;
-        int iv = (int)av;
-        int fv = (int)((av - (float)iv) * 1000.0f + 0.5f);
-        if (fv >= 1000) { iv++; fv = 0; }
-        snprintf(b, sz, "%c%3d.%03d", neg ? '-' : '+', iv, fv);
-    };
-
-    // ── Step 4: Live refresh loop ─────────────────────────────────────────
-    _add_verdict_buttons(true);   // PASS >> Continue (non-blocking)
-
-    while (_verdict < 0) {
-        // Burst-read 12 bytes: AX_L(0x35) … GZ_H(0x40)
+    // Burst-read helper
+    auto read_raw = [&](int16_t &ax, int16_t &ay, int16_t &az,
+                        int16_t &gx, int16_t &gy, int16_t &gz) {
         Wire.beginTransmission(QMI8658_ADDR);
         Wire.write(0x35);
         Wire.endTransmission(false);
         Wire.requestFrom(QMI8658_ADDR, (uint8_t)12);
-
-        int16_t ax = 0, ay = 0, az = 0, gx = 0, gy = 0, gz = 0;
+        ax = ay = az = gx = gy = gz = 0;
         if (Wire.available() >= 12) {
-            uint8_t buf[12];
-            for (int i = 0; i < 12; i++) buf[i] = (uint8_t)Wire.read();
-            ax = (int16_t)((uint16_t)(buf[1] << 8) | buf[0]);
-            ay = (int16_t)((uint16_t)(buf[3] << 8) | buf[2]);
-            az = (int16_t)((uint16_t)(buf[5] << 8) | buf[4]);
-            gx = (int16_t)((uint16_t)(buf[7] << 8) | buf[6]);
-            gy = (int16_t)((uint16_t)(buf[9] << 8) | buf[8]);
-            gz = (int16_t)((uint16_t)(buf[11] << 8) | buf[10]);
+            uint8_t b[12];
+            for (int i = 0; i < 12; i++) b[i] = (uint8_t)Wire.read();
+            ax = (int16_t)((uint16_t)(b[1]<<8)|b[0]);
+            ay = (int16_t)((uint16_t)(b[3]<<8)|b[2]);
+            az = (int16_t)((uint16_t)(b[5]<<8)|b[4]);
+            gx = (int16_t)((uint16_t)(b[7]<<8)|b[6]);
+            gy = (int16_t)((uint16_t)(b[9]<<8)|b[8]);
+            gz = (int16_t)((uint16_t)(b[11]<<8)|b[10]);
         }
+    };
 
-        // Each value: ±NNN.NNN (8 chars)
-        char sax[12], say[12], saz[12], sgx[12], sgy[12], sgz[12];
-        fmt8(sax, sizeof(sax), ax * ACC_SCALE);
-        fmt8(say, sizeof(say), ay * ACC_SCALE);
-        fmt8(saz, sizeof(saz), az * ACC_SCALE);
-        fmt8(sgx, sizeof(sgx), gx * GYR_SCALE);
-        fmt8(sgy, sizeof(sgy), gy * GYR_SCALE);
-        fmt8(sgz, sizeof(sgz), gz * GYR_SCALE);
+    // ── Step 4: Gyro zero-bias calibration (keep still ~2 s) ─────────────
+    // 100 samples × 20 ms = 2 s
+    constexpr uint16_t CALIB_N = 100;
+    ImuBias  bias(CALIB_N);
+    MahonyAHRS ahrs(1.0f, 0.005f, 0.02f);  // Kp, Ki, dt_s
 
-        // Two-column layout: Accel(g) left | Gyro(dps) right
-        // Each line: "X:±NNN.NNN g    X:±NNN.NNN dps"
-        // Monospace Inconsolata_16 ~9px/char; 320-24=296px usable → ~32 chars/line
-        char msg[200];
+    {
+        char prog[64];
+        for (uint16_t i = 0; i < CALIB_N; i++) {
+            int16_t rax, ray, raz, rgx, rgy, rgz;
+            read_raw(rax, ray, raz, rgx, rgy, rgz);
+            bias.feed(rgx * GYR_SCALE, rgy * GYR_SCALE, rgz * GYR_SCALE);
+            if ((i & 0x0F) == 0) {
+                int pct = (int)(i * 100 / CALIB_N);
+                snprintf(prog, sizeof(prog),
+                         "Keep still...\nCalibrating gyro ZRO\n[%d%%]", pct);
+                _update_screen(prog, Result::SKIP);
+            }
+            vTaskDelay(pdMS_TO_TICKS(20));
+        }
+    }
+
+    // Float formatters (avoid %f)
+    // fmt_a: ±N.NNN  (6 chars) — accel in g (0–8 g)
+    auto fmt_a = [](char *b, int sz, float v) {
+        bool neg = (v < 0.0f);  float av = neg ? -v : v;
+        int iv = (int)av;
+        int fv = (int)((av - (float)iv) * 1000.0f + 0.5f);
+        if (fv >= 1000) { iv++; fv = 0; }
+        snprintf(b, sz, "%c%d.%03d", neg?'-':'+', iv, fv);
+    };
+    // fmt_b: ±NNN.N  (6 chars) — gyro dps or attitude deg
+    auto fmt_b = [](char *b, int sz, float v) {
+        bool neg = (v < 0.0f);  float av = neg ? -v : v;
+        int iv = (int)av;
+        int fv = (int)((av - (float)iv) * 10.0f + 0.5f);
+        if (fv >= 10) { iv++; fv = 0; }
+        snprintf(b, sz, "%c%3d.%1d", neg?'-':'+', iv, fv);
+    };
+
+    // ── Step 5: Live 3-column table (20 ms refresh) ───────────────────────
+    // Inconsolata_16: 8px/char; label width = SCREEN_WIDTH-24 = 296px = 37 chars.
+    // Values: fmt_a → 6 chars (±N.NNN), fmt_b → 6 chars (±NNN.N)
+    // Layout (37 chars, 3 equal-ish cols):
+    //   Col1 @ char  0  : "X:" (2) + acc (6)  → total 8, then 6 sp → col1 = 14
+    //   Col2 @ char 14  : gyr (6)             → total 6, then 6 sp → col2 = 12
+    //   Col3 @ char 26  : rpy (6)             → col3 = 6 (+ newline)
+    //   Total = 14+12+6 = 32 chars visible = 256 px (86 % of 296 px)
+    _add_verdict_buttons(true);   // PASS >> Continue (non-blocking)
+
+    while (_verdict < 0) {
+        int16_t rax, ray, raz, rgx, rgy, rgz;
+        read_raw(rax, ray, raz, rgx, rgy, rgz);
+
+        float fax = rax * ACC_SCALE;          // g
+        float fay = ray * ACC_SCALE;
+        float faz = raz * ACC_SCALE;
+        float fgx = rgx * GYR_SCALE;          // dps (raw, with bias)
+        float fgy = rgy * GYR_SCALE;
+        float fgz = rgz * GYR_SCALE;
+
+        // Feed Mahony with bias-removed gyro [rad/s] and accel [g]
+        float bgx = fgx, bgy = fgy, bgz = fgz;
+        bias.apply(bgx, bgy, bgz);            // subtract ZRO
+        ahrs.update(bgx * kDeg2Rad, bgy * kDeg2Rad, bgz * kDeg2Rad,
+                    fax, fay, faz);
+
+        Euler e = ahrs.euler();
+        float roll_d  = e.roll  * kRad2Deg;
+        float pitch_d = e.pitch * kRad2Deg;
+        float yaw_d   = e.yaw   * kRad2Deg;
+
+        char sa[3][10], sg[3][10], se[3][10];
+        fmt_a(sa[0], sizeof(sa[0]), fax);
+        fmt_a(sa[1], sizeof(sa[1]), fay);
+        fmt_a(sa[2], sizeof(sa[2]), faz);
+        fmt_b(sg[0], sizeof(sg[0]), fgx);
+        fmt_b(sg[1], sizeof(sg[1]), fgy);
+        fmt_b(sg[2], sizeof(sg[2]), fgz);
+        fmt_b(se[0], sizeof(se[0]), roll_d);
+        fmt_b(se[1], sizeof(se[1]), pitch_d);
+        fmt_b(se[2], sizeof(se[2]), yaw_d);
+
+        char msg[240];
         snprintf(msg, sizeof(msg),
-                 " Accel(g)    Gyro(dps)\n"
-                 "X:%s  %s\n"
-                 "Y:%s  %s\n"
-                 "Z:%s  %s",
-                 sax, sgx,
-                 say, sgy,
-                 saz, sgz);
+                 "Acc/g         Gyr/dps     RPY/deg\n"
+                 "X:%s      %s      %s  (Roll)\n"
+                 "Y:%s      %s      %s  (Pitch)\n"
+                 "Z:%s      %s      %s  (Yaw)",
+                 sa[0], sg[0], se[0],
+                 sa[1], sg[1], se[1],
+                 sa[2], sg[2], se[2]);
 
         _update_screen(msg, Result::PASS);
         vTaskDelay(pdMS_TO_TICKS(20));

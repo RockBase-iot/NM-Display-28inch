@@ -23,9 +23,9 @@ void MahonyAHRS::update(float gx, float gy, float gz,
     // ── Accelerometer correction ──────────────────────────────────────────
     // Only apply when acceleration magnitude is plausible (not in free-fall
     // or under strong linear acceleration).  Threshold: 0.5g – 2.0g.
+    // ax/ay/az are expected in [g]; threshold in g²: 0.25 – 4.0.
     const float accSqNorm = ax*ax + ay*ay + az*az;
-    if (accSqNorm > (0.5f*0.5f*9.81f*9.81f) &&
-        accSqNorm < (2.0f*2.0f*9.81f*9.81f))
+    if (accSqNorm > 0.25f && accSqNorm < 4.0f)
     {
         // Normalize accelerometer vector
         float invNorm = 1.0f / sqrtf(accSqNorm);
