@@ -79,6 +79,7 @@ private:
     // ── LVGL button event callbacks (static so they can access private _verdict) ─
     static void _on_ok_btn(lv_event_t *e);
     static void _on_fail_btn(lv_event_t *e);
+    static void _on_imu_toggle_btn(lv_event_t *e); // 3D ↔ RAW view switch
 
     // ── State ─────────────────────────────────────────────────────────────
     Board       &_board;

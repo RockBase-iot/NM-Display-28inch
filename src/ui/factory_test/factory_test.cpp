@@ -38,6 +38,92 @@ void FactoryTest::_on_fail_btn(lv_event_t *e)
     static_cast<FactoryTest *>(lv_event_get_user_data(e))->_verdict = 0;
 }
 
+// ─── IMU live-view: toggle context passed to _on_imu_toggle_btn ──────────────
+// Lifetime: allocated on the stack of _test_imu(); the pointer is valid for
+// the entire duration of the IMU test because LVGL only dispatches input events
+// to widgets on the active screen, and the screen is replaced before
+// _test_imu() returns.
+struct ImuToggleCtx {
+    volatile bool *show_3d;
+    lv_obj_t      *toggle_lbl;   // label on the toggle button
+    lv_obj_t      *canvas;       // 3D canvas widget
+    lv_obj_t      *tbl_panel;    // raw-data text panel
+};
+
+void FactoryTest::_on_imu_toggle_btn(lv_event_t *e)
+{
+    if (lv_event_get_code(e) != LV_EVENT_CLICKED) return;
+    auto *ctx = static_cast<ImuToggleCtx *>(lv_event_get_user_data(e));
+    bool new3d = !(*ctx->show_3d);
+    *ctx->show_3d = new3d;
+    lv_label_set_text(ctx->toggle_lbl, new3d ? "RAW" : "3D");
+    if (new3d) {
+        lv_obj_add_flag  (ctx->tbl_panel, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_clear_flag(ctx->canvas,    LV_OBJ_FLAG_HIDDEN);
+    } else {
+        lv_obj_clear_flag(ctx->tbl_panel, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_add_flag  (ctx->canvas,    LV_OBJ_FLAG_HIDDEN);
+    }
+}
+
+// ─── 3D wireframe cube helper ─────────────────────────────────────────────────
+// Draws a perspective-projected unit cube rotated by quaternion q onto canvas.
+// Must be called with the LVGL mutex held.
+static void _draw_cube_frame(lv_obj_t *canvas, const Quat &q)
+{
+    // 8 cube vertices, half-size = 0.5 (bit-encoded: x=bit0 y=bit1 z=bit2)
+    static const float CV[8][3] = {
+        {-0.5f,-0.5f,-0.5f}, { 0.5f,-0.5f,-0.5f},
+        {-0.5f, 0.5f,-0.5f}, { 0.5f, 0.5f,-0.5f},
+        {-0.5f,-0.5f, 0.5f}, { 0.5f,-0.5f, 0.5f},
+        {-0.5f, 0.5f, 0.5f}, { 0.5f, 0.5f, 0.5f},
+    };
+    // 12 edges: each pair shares exactly 1 differing bit
+    static const uint8_t EDGES[12][2] = {
+        {0,1},{2,3},{4,5},{6,7},   // x-axis edges
+        {0,2},{1,3},{4,6},{5,7},   // y-axis edges
+        {0,4},{1,5},{2,6},{3,7},   // z-axis edges
+    };
+
+    constexpr uint16_t CW   = SCREEN_WIDTH;
+    constexpr uint16_t CH   = SCREEN_HEIGHT - 40 - 54;   // body panel height = 146
+    constexpr float    FOCAL = 150.0f;
+    constexpr float    CAM_Z = 3.0f;
+    const float        cx    = CW * 0.5f;
+    const float        cy    = CH * 0.5f;
+
+    lv_canvas_fill_bg(canvas, lv_color_hex(0x0D1A30), LV_OPA_COVER);
+
+    // Rotate each vertex: r = q ⊗ v_pure ⊗ q*
+    float px[8], py[8];
+    for (int i = 0; i < 8; i++) {
+        Quat pv = {0.0f, CV[i][0], CV[i][1], CV[i][2]};
+        Quat r  = q * pv * q.conjugate();
+        float z_eff = CAM_Z + r.z;
+        if (z_eff < 0.1f) z_eff = 0.1f;
+        float proj = FOCAL / z_eff;
+        px[i] = cx + r.x * proj;
+        py[i] = cy + r.y * proj;
+    }
+
+    lv_draw_line_dsc_t ldsc;
+    lv_draw_line_dsc_init(&ldsc);
+    ldsc.color       = lv_color_hex(0x00B4FF);
+    ldsc.width       = 2;
+    ldsc.round_start = 1;
+    ldsc.round_end   = 1;
+    ldsc.opa         = LV_OPA_COVER;
+
+    for (int i = 0; i < 12; i++) {
+        int a = EDGES[i][0], b = EDGES[i][1];
+        lv_point_t pts[2] = {
+            {(lv_coord_t)px[a], (lv_coord_t)py[a]},
+            {(lv_coord_t)px[b], (lv_coord_t)py[b]},
+        };
+        lv_canvas_draw_line(canvas, pts, 2, &ldsc);
+    }
+}
+
 // ─── Constructor ─────────────────────────────────────────────────────────────
 
 FactoryTest::FactoryTest(Board &board) : _board(board) {}
@@ -865,63 +951,197 @@ FactoryTest::Result FactoryTest::_test_imu()
         snprintf(b, sz, "%c%3d.%1d", neg?'-':'+', iv, fv);
     };
 
-    // ── Step 5: Live 3-column table (20 ms refresh) ───────────────────────
-    // Inconsolata_16: 8px/char; label width = SCREEN_WIDTH-24 = 296px = 37 chars.
-    // Values: fmt_a → 6 chars (±N.NNN), fmt_b → 6 chars (±NNN.N)
-    // Layout (37 chars, 3 equal-ish cols):
-    //   Col1 @ char  0  : "X:" (2) + acc (6)  → total 8, then 6 sp → col1 = 14
-    //   Col2 @ char 14  : gyr (6)             → total 6, then 6 sp → col2 = 12
-    //   Col3 @ char 26  : rpy (6)             → col3 = 6 (+ newline)
-    //   Total = 14+12+6 = 32 chars visible = 256 px (86 % of 296 px)
-    _add_verdict_buttons(true);   // PASS >> Continue (non-blocking)
+    // ── Step 5: Live view — RAW table (default) or 3D cube (toggle) ──────
+    constexpr uint16_t TITLE_H = 40;
+    constexpr uint16_t BTN_H   = 54;
+    constexpr uint16_t BODY_H  = SCREEN_HEIGHT - TITLE_H - BTN_H; // 146
 
+    // Allocate 3D canvas pixel buffer from PSRAM (~91 KB for 320×146 RGB565)
+    const size_t cbuf_sz = LV_CANVAS_BUF_SIZE_TRUE_COLOR(SCREEN_WIDTH, BODY_H);
+    auto *cbuf3d = static_cast<lv_color_t *>(
+        heap_caps_malloc(cbuf_sz, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
+
+    // Live-view widget handles (set during screen build, used in the loop)
+    // Default to 3D mode when PSRAM buffer is available, otherwise fall back to RAW
+    volatile bool show_3d  = (cbuf3d != nullptr);
+    lv_obj_t *canvas3d     = nullptr;
+    lv_obj_t *tbl_panel    = nullptr;
+    lv_obj_t *tbl_lbl      = nullptr;
+    ImuToggleCtx toggle_ctx = {};   // on-stack; valid for the entire function
+
+    // ── Build custom live-view screen ──────────────────────────────────────
+    if (!LVGL_LOCK(500)) {
+        if (cbuf3d) heap_caps_free(cbuf3d);
+        return Result::SKIP;
+    }
+
+    {
+        lv_obj_t *scr = lv_obj_create(nullptr);
+        lv_obj_set_style_bg_color(scr, lv_color_hex(COLOR_BG), 0);
+        lv_obj_set_style_bg_opa(scr, LV_OPA_COVER, 0);
+        lv_obj_set_style_border_width(scr, 0, 0);
+        lv_obj_clear_flag(scr, LV_OBJ_FLAG_SCROLLABLE);
+
+        // Title bar
+        lv_obj_t *tb = lv_obj_create(scr);
+        lv_obj_set_size(tb, SCREEN_WIDTH, TITLE_H);
+        lv_obj_align(tb, LV_ALIGN_TOP_MID, 0, 0);
+        lv_obj_set_style_bg_color(tb, lv_color_hex(COLOR_TITLE_BG), 0);
+        lv_obj_set_style_border_width(tb, 0, 0);
+        lv_obj_set_style_radius(tb, 0, 0);
+        lv_obj_set_style_pad_all(tb, 4, 0);
+        lv_obj_clear_flag(tb, LV_OBJ_FLAG_SCROLLABLE);
+        lv_obj_t *tb_lbl = lv_label_create(tb);
+        lv_label_set_text(tb_lbl, "Test 5/9: IMU (QMI8658)");
+        lv_obj_set_style_text_color(tb_lbl, lv_color_hex(COLOR_TEXT), 0);
+        lv_obj_set_style_text_font(tb_lbl, &lv_font_montserrat_16, 0);
+        lv_obj_center(tb_lbl);
+
+        // ── RAW table panel (default: hidden when 3D mode is active) ───────────
+        tbl_panel = lv_obj_create(scr);
+        lv_obj_set_size(tbl_panel, SCREEN_WIDTH, BODY_H);
+        lv_obj_set_pos(tbl_panel, 0, TITLE_H);
+        lv_obj_set_style_bg_color(tbl_panel, lv_color_hex(COLOR_BG), 0);
+        lv_obj_set_style_bg_opa(tbl_panel, LV_OPA_COVER, 0);
+        lv_obj_set_style_border_width(tbl_panel, 0, 0);
+        lv_obj_set_style_radius(tbl_panel, 0, 0);
+        lv_obj_set_style_pad_left(tbl_panel, 8, 0);
+        lv_obj_set_style_pad_right(tbl_panel, 8, 0);
+        lv_obj_set_style_pad_top(tbl_panel, 4, 0);
+        lv_obj_set_style_pad_bottom(tbl_panel, 4, 0);
+        lv_obj_clear_flag(tbl_panel, LV_OBJ_FLAG_SCROLLABLE);
+        if (show_3d) lv_obj_add_flag(tbl_panel, LV_OBJ_FLAG_HIDDEN);  // hide when starting in 3D
+
+        tbl_lbl = lv_label_create(tbl_panel);
+        lv_label_set_text(tbl_lbl, "");
+        lv_obj_set_style_text_color(tbl_lbl, lv_color_hex(COLOR_SUBTEXT), 0);
+        lv_obj_set_style_text_font(tbl_lbl, &Inconsolata_16, 0);
+        lv_obj_set_style_text_line_space(tbl_lbl, 2, 0);
+        lv_obj_set_width(tbl_lbl, SCREEN_WIDTH - 24);
+        lv_label_set_long_mode(tbl_lbl, LV_LABEL_LONG_WRAP);
+        lv_obj_align(tbl_lbl, LV_ALIGN_TOP_LEFT, 0, 0);
+
+        // ── 3D canvas (initially hidden) ─────────────────────────────────────
+        if (cbuf3d) {
+            canvas3d = lv_canvas_create(scr);
+            lv_canvas_set_buffer(canvas3d, cbuf3d, SCREEN_WIDTH, BODY_H,
+                                 LV_IMG_CF_TRUE_COLOR);
+            lv_obj_set_pos(canvas3d, 0, TITLE_H);
+            lv_canvas_fill_bg(canvas3d, lv_color_hex(0x0D1A30), LV_OPA_COVER);
+            // Visible by default (we start in 3D mode); hidden only if fallback to RAW
+            if (!show_3d) lv_obj_add_flag(canvas3d, LV_OBJ_FLAG_HIDDEN);
+        }
+
+        // ── Bottom button row: [3D 80px] [gap 8px] [PASS >> Continue 216px] ─
+        // Toggle button (left, blue)
+        lv_obj_t *tog_btn = lv_btn_create(scr);
+        lv_obj_set_size(tog_btn, 80, 44);
+        lv_obj_align(tog_btn, LV_ALIGN_BOTTOM_LEFT, 8, -6);
+        lv_obj_set_style_bg_color(tog_btn, lv_color_hex(0x2980B9), 0);
+        lv_obj_set_style_bg_color(tog_btn, lv_color_hex(0x1F618D), LV_STATE_PRESSED);
+        lv_obj_set_style_border_width(tog_btn, 0, 0);
+        lv_obj_set_style_radius(tog_btn, 6, 0);
+        lv_obj_t *tog_lbl = lv_label_create(tog_btn);
+        lv_label_set_text(tog_lbl, show_3d ? "RAW" : "3D");  // label reflects current mode
+        lv_obj_set_style_text_font(tog_lbl, &lv_font_montserrat_16, 0);
+        lv_obj_set_style_text_color(tog_lbl, lv_color_hex(0xFFFFFF), 0);
+        lv_obj_center(tog_lbl);
+
+        toggle_ctx = {&show_3d, tog_lbl, canvas3d, tbl_panel};
+        lv_obj_add_event_cb(tog_btn, _on_imu_toggle_btn, LV_EVENT_CLICKED, &toggle_ctx);
+
+        // PASS button (right, green)
+        _verdict = -1;
+        lv_obj_t *pass_btn = lv_btn_create(scr);
+        lv_obj_set_size(pass_btn, 216, 44);
+        lv_obj_align(pass_btn, LV_ALIGN_BOTTOM_RIGHT, -8, -6);
+        lv_obj_set_style_bg_color(pass_btn, lv_color_hex(COLOR_PASS), 0);
+        lv_obj_set_style_bg_color(pass_btn, lv_color_hex(0x27AE60), LV_STATE_PRESSED);
+        lv_obj_set_style_border_width(pass_btn, 0, 0);
+        lv_obj_set_style_radius(pass_btn, 6, 0);
+        lv_obj_add_event_cb(pass_btn, _on_ok_btn, LV_EVENT_CLICKED, this);
+        lv_obj_t *pass_lbl = lv_label_create(pass_btn);
+        lv_label_set_text(pass_lbl, LV_SYMBOL_OK "  PASS >> Continue");
+        lv_obj_set_style_text_font(pass_lbl, &lv_font_montserrat_16, 0);
+        lv_obj_set_style_text_color(pass_lbl, lv_color_hex(0xFFFFFF), 0);
+        lv_obj_center(pass_lbl);
+
+        lv_scr_load(scr);
+    }
+    LVGL_UNLOCK();
+
+    // ── Main refresh loop (20 ms) ──────────────────────────────────────────
     while (_verdict < 0) {
         int16_t rax, ray, raz, rgx, rgy, rgz;
         read_raw(rax, ray, raz, rgx, rgy, rgz);
 
-        float fax = rax * ACC_SCALE;          // g
+        float fax = rax * ACC_SCALE;
         float fay = ray * ACC_SCALE;
         float faz = raz * ACC_SCALE;
-        float fgx = rgx * GYR_SCALE;          // dps (raw, with bias)
+        float fgx = rgx * GYR_SCALE;
         float fgy = rgy * GYR_SCALE;
         float fgz = rgz * GYR_SCALE;
 
-        // Feed Mahony with bias-removed gyro [rad/s] and accel [g]
+        // Bias-corrected Mahony update
         float bgx = fgx, bgy = fgy, bgz = fgz;
-        bias.apply(bgx, bgy, bgz);            // subtract ZRO
+        bias.apply(bgx, bgy, bgz);
         ahrs.update(bgx * kDeg2Rad, bgy * kDeg2Rad, bgz * kDeg2Rad,
                     fax, fay, faz);
 
-        Euler e = ahrs.euler();
-        float roll_d  = e.roll  * kRad2Deg;
-        float pitch_d = e.pitch * kRad2Deg;
-        float yaw_d   = e.yaw   * kRad2Deg;
+        if (LVGL_LOCK(10)) {
+            if (show_3d && canvas3d) {
+                // ── 3D cube mode ───────────────────────────────────────────
+                // Physical calibration: swap pitch↔roll, invert yaw
+                Euler e3 = ahrs.euler();
+                float hr = e3.pitch * 0.5f;   // new roll  = physical pitch
+                float hp = e3.roll  * 0.5f;   // new pitch = physical roll
+                float hy = -e3.yaw  * 0.5f;   // invert yaw
+                float cr = cosf(hr), sr = sinf(hr);
+                float cp = cosf(hp), sp = sinf(hp);
+                float cy3 = cosf(hy), sy3 = sinf(hy);
+                Quat q_adj = {
+                    cr*cp*cy3 + sr*sp*sy3,
+                    sr*cp*cy3 - cr*sp*sy3,
+                    cr*sp*cy3 + sr*cp*sy3,
+                    cr*cp*sy3 - sr*sp*cy3
+                };
+                _draw_cube_frame(canvas3d, q_adj);
+            } else if (!show_3d && tbl_lbl) {
+                // ── RAW table mode ─────────────────────────────────────────
+                Euler e = ahrs.euler();
+                float roll_d  = e.roll  * kRad2Deg;
+                float pitch_d = e.pitch * kRad2Deg;
+                float yaw_d   = e.yaw   * kRad2Deg;
 
-        char sa[3][10], sg[3][10], se[3][10];
-        fmt_a(sa[0], sizeof(sa[0]), fax);
-        fmt_a(sa[1], sizeof(sa[1]), fay);
-        fmt_a(sa[2], sizeof(sa[2]), faz);
-        fmt_b(sg[0], sizeof(sg[0]), fgx);
-        fmt_b(sg[1], sizeof(sg[1]), fgy);
-        fmt_b(sg[2], sizeof(sg[2]), fgz);
-        fmt_b(se[0], sizeof(se[0]), roll_d);
-        fmt_b(se[1], sizeof(se[1]), pitch_d);
-        fmt_b(se[2], sizeof(se[2]), yaw_d);
+                char sa[3][10], sg[3][10], se[3][10];
+                fmt_a(sa[0], sizeof(sa[0]), fax);
+                fmt_a(sa[1], sizeof(sa[1]), fay);
+                fmt_a(sa[2], sizeof(sa[2]), faz);
+                fmt_b(sg[0], sizeof(sg[0]), fgx);
+                fmt_b(sg[1], sizeof(sg[1]), fgy);
+                fmt_b(sg[2], sizeof(sg[2]), fgz);
+                fmt_b(se[0], sizeof(se[0]), roll_d);
+                fmt_b(se[1], sizeof(se[1]), pitch_d);
+                fmt_b(se[2], sizeof(se[2]), yaw_d);
 
-        char msg[240];
-        snprintf(msg, sizeof(msg),
-                 "Acc/g         Gyr/dps     RPY/deg\n"
-                 "X:%s      %s      %s  (Roll)\n"
-                 "Y:%s      %s      %s  (Pitch)\n"
-                 "Z:%s      %s      %s  (Yaw)",
-                 sa[0], sg[0], se[0],
-                 sa[1], sg[1], se[1],
-                 sa[2], sg[2], se[2]);
-
-        _update_screen(msg, Result::PASS);
+                char msg[240];
+                snprintf(msg, sizeof(msg),
+                         "Acc/g         Gyr/dps     RPY/deg\n"
+                         "X:%s      %s      %s  (Roll)\n"
+                         "Y:%s      %s      %s  (Pitch)\n"
+                         "Z:%s      %s      %s  (Yaw)",
+                         sa[0], sg[0], se[0],
+                         sa[1], sg[1], se[1],
+                         sa[2], sg[2], se[2]);
+                lv_label_set_text(tbl_lbl, msg);
+            }
+            LVGL_UNLOCK();
+        }
         vTaskDelay(pdMS_TO_TICKS(20));
     }
 
+    vTaskDelay(pdMS_TO_TICKS(80));   // let LVGL flush last frame before freeing
+    if (cbuf3d) heap_caps_free(cbuf3d);
     return Result::PASS;
 }
 
