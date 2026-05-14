@@ -278,15 +278,18 @@ static void _draw_ahrs_frame(lv_obj_t *canvas, float roll, float pitch, float ya
         lv_canvas_draw_line(canvas, tail, 2, &ldsc);
     }
 
-    // ── 7. Roll / Pitch numeric readout (top-left, below arc) ────────────
+    // ── 7. Roll / Pitch / Yaw numeric readout (top-left, below arc) ─────
     {
         lv_draw_label_dsc_t tdsc; lv_draw_label_dsc_init(&tdsc);
         tdsc.color = lv_color_hex(0xFFFFFF); tdsc.font = &lv_font_montserrat_14;
-        char buf[16];
-        snprintf(buf, sizeof(buf), "R%+5.1f", roll_deg);
-        lv_canvas_draw_text(canvas, 4, 20, 74, &tdsc, buf);
-        snprintf(buf, sizeof(buf), "P%+5.1f", pitch_deg);
-        lv_canvas_draw_text(canvas, 4, 36, 74, &tdsc, buf);
+        // Width 96 px fits worst-case "Pitch -100.0" (12 chars × ~8 px) without wrapping.
+        char buf[20];
+        snprintf(buf, sizeof(buf), "Roll  %+6.1f", roll_deg);
+        lv_canvas_draw_text(canvas, 4, 20, 96, &tdsc, buf);
+        snprintf(buf, sizeof(buf), "Pitch %+6.1f", pitch_deg);
+        lv_canvas_draw_text(canvas, 4, 36, 96, &tdsc, buf);
+        snprintf(buf, sizeof(buf), "Yaw   %+6.1f", yaw_deg);
+        lv_canvas_draw_text(canvas, 4, 52, 96, &tdsc, buf);
     }
 
     // ── 8. Yaw compass tape (bottom YAW_H px) ────────────────────────────
@@ -1621,23 +1624,366 @@ FactoryTest::Result FactoryTest::_test_rtc()
 
 FactoryTest::Result FactoryTest::_test_camera()
 {
-    // TODO: Camera hardware test not yet implemented.
-    // Requires a physical OV2640 (or compatible) module connected to CAM_* pins.
-    // TODO: Verify CAM_LEDC_TIMER / CAM_LEDC_CH don't conflict with backlight
-    //       LEDC before enabling esp_camera_init() here.
-    // TODO: Add frame-quality check: verify captured JPEG size > threshold
-    //       and that the frame is not an all-black "dark frame".
-    _show_screen(8, "Camera",
-        "TODO: Camera test\n"
-        "not implemented yet.\n"
-        "\n"
-        "Requires OV2640 module\n"
-        "on CAM_* pins.\n"
-        "\n"
-        "Press Ok to SKIP.",
-        Result::SKIP);
-    _wait_verdict();
-    return Result::SKIP;   // always SKIP until TODO resolved
+    _show_screen(8, "Camera", "Initializing camera...", Result::SKIP);
+
+    // ── Error helper — uses the body area created by _show_screen ────────────
+    auto show_body_error = [&](const char *msg) {
+        if (!LVGL_LOCK(500)) return;
+        auto *lbl   = static_cast<lv_obj_t *>(_lv_body_label);
+        auto *panel = static_cast<lv_obj_t *>(_lv_body_panel);
+        lv_obj_clear_flag(panel, LV_OBJ_FLAG_SCROLLABLE);
+        lv_label_set_text(lbl, msg);
+        lv_obj_set_style_text_color(lbl, lv_color_hex(COLOR_FAIL), 0);
+        lv_obj_set_style_text_align(lbl, LV_TEXT_ALIGN_CENTER, 0);
+        lv_obj_set_width(lbl, SCREEN_WIDTH - 24);
+        lv_obj_align(lbl, LV_ALIGN_CENTER, 0, 0);
+        LVGL_UNLOCK();
+    };
+
+    // ── AXP2101 LDO enable for camera power ──────────────────────────────────
+    // The camera sensor requires several power rails from the AXP2101 PMU.
+    // application.cpp has not yet configured the PMU, so the rails may be off
+    // by default, causing esp_camera_fb_get() to always return NULL even though
+    // sensor I2C communication (PID read) succeeds at lower current.
+    //
+    // AXP2101 register map (relevant to camera):
+    //   0x93  ALDO1 voltage   (OV5640 AVDD  → 2.8 V  → 0x17  [500+23×100 mV])
+    //   0x94  ALDO2 voltage   (OV5640 DOVDD → 2.8 V  → 0x17)
+    //   0x95  ALDO3 voltage   (OV5640 AVDD  → 2.8 V  → 0x17, board-variant)
+    //   0x97  BLDO1 voltage   (OV5640 DVDD  → 1.5 V  → 0x0A  [500+10×100 mV])
+    //   0x90  ALDO1/2/3/4 enable bitfield  bit3=ALDO4 bit2=ALDO3 bit1=ALDO2 bit0=ALDO1
+    //   0x91  BLDO1/BLDO2 enable
+    //   0x92  DLDO1/DLDO2 enable
+    //
+    // Enable all LDO rails needed by the camera and other board peripherals.
+    {
+        constexpr uint8_t PMU = 0x34;   // AXP2101 default I2C address
+
+        // Helper: read-modify-write one AXP2101 register
+        auto pmu_rmw = [&](uint8_t reg, uint8_t set_bits, uint8_t clear_bits) {
+            Wire.beginTransmission(PMU);
+            Wire.write(reg);
+            Wire.endTransmission(false);
+            Wire.requestFrom(PMU, (uint8_t)1);
+            uint8_t v = Wire.available() ? Wire.read() : 0x00;
+            v = (v & ~clear_bits) | set_bits;
+            Wire.beginTransmission(PMU);
+            Wire.write(reg); Wire.write(v);
+            Wire.endTransmission();
+        };
+
+        // Set output voltages
+        // ALDO1 = 3300 mV : step = (3300-500)/100 = 28 = 0x1C
+        // ALDO2 = 3300 mV : 0x1C
+        // ALDO3 = 3300 mV : 0x1C
+        // ALDO4 = 3300 mV : 0x1C
+        // BLDO1 = 1500 mV : step = (1500-500)/100 = 10 = 0x0A
+        // BLDO2 = 2800 mV : step = (2800-500)/100 = 23 = 0x17
+        // DLDO1 = 3300 mV : 0x1C
+        // DLDO2 = 3300 mV : step = (3300-500)/50 = 56 = 0x38 (DLDO2 is 50mV/step)
+        Wire.beginTransmission(PMU); Wire.write(0x93); Wire.write(0x1C); Wire.endTransmission(); // ALDO1
+        Wire.beginTransmission(PMU); Wire.write(0x94); Wire.write(0x1C); Wire.endTransmission(); // ALDO2
+        Wire.beginTransmission(PMU); Wire.write(0x95); Wire.write(0x1C); Wire.endTransmission(); // ALDO3
+        Wire.beginTransmission(PMU); Wire.write(0x96); Wire.write(0x1C); Wire.endTransmission(); // ALDO4
+        Wire.beginTransmission(PMU); Wire.write(0x97); Wire.write(0x0A); Wire.endTransmission(); // BLDO1
+        Wire.beginTransmission(PMU); Wire.write(0x98); Wire.write(0x17); Wire.endTransmission(); // BLDO2
+        Wire.beginTransmission(PMU); Wire.write(0x99); Wire.write(0x1C); Wire.endTransmission(); // DLDO1
+        Wire.beginTransmission(PMU); Wire.write(0x9A); Wire.write(0x38); Wire.endTransmission(); // DLDO2
+
+        // Enable ALDO1/2/3/4 (reg 0x90 bits [3:0])
+        pmu_rmw(0x90, 0x0F, 0x00);
+        // Enable BLDO1/2 (reg 0x91 bits [1:0])
+        pmu_rmw(0x91, 0x03, 0x00);
+        // Enable DLDO1/2 (reg 0x92 bits [1:0])
+        pmu_rmw(0x92, 0x03, 0x00);
+
+        vTaskDelay(pdMS_TO_TICKS(20));   // let rails stabilise
+
+        // Read back enable registers so we can log them
+        auto pmu_read = [&](uint8_t reg) -> uint8_t {
+            Wire.beginTransmission(PMU); Wire.write(reg); Wire.endTransmission(false);
+            Wire.requestFrom(PMU, (uint8_t)1);
+            return Wire.available() ? Wire.read() : 0xFF;
+        };
+        LOG_I("[CAM] AXP2101 enable regs: 0x90=0x%02x 0x91=0x%02x 0x92=0x%02x",
+              pmu_read(0x90), pmu_read(0x91), pmu_read(0x92));
+    }
+
+    // ── Camera configuration ──────────────────────────────────────────────────
+    // LEDC CH0 / TIMER0 are reserved for camera XCLK (see config.h).
+    // Backlight uses CH1 so there is no conflict.
+    camera_config_t cam_cfg = {};
+    cam_cfg.ledc_channel  = CAM_LEDC_CH;
+    cam_cfg.ledc_timer    = CAM_LEDC_TIMER;
+    cam_cfg.pin_d0        = CAM_D0_PIN;
+    cam_cfg.pin_d1        = CAM_D1_PIN;
+    cam_cfg.pin_d2        = CAM_D2_PIN;
+    cam_cfg.pin_d3        = CAM_D3_PIN;
+    cam_cfg.pin_d4        = CAM_D4_PIN;
+    cam_cfg.pin_d5        = CAM_D5_PIN;
+    cam_cfg.pin_d6        = CAM_D6_PIN;
+    cam_cfg.pin_d7        = CAM_D7_PIN;
+    cam_cfg.pin_xclk      = CAM_XCLK_PIN;
+    cam_cfg.pin_pclk      = CAM_PCLK_PIN;
+    cam_cfg.pin_vsync     = CAM_VSYNC_PIN;
+    cam_cfg.pin_href      = CAM_HREF_PIN;
+    cam_cfg.pin_sccb_sda  = -1;    // use existing shared I2C port 0 (Wire)
+    cam_cfg.pin_sccb_scl  = -1;
+    cam_cfg.sccb_i2c_port = 0;
+    cam_cfg.pin_pwdn      = CAM_PWDN_PIN;
+    cam_cfg.pin_reset     = CAM_RESET_PIN;
+    cam_cfg.xclk_freq_hz  = 20000000;
+    cam_cfg.frame_size    = FRAMESIZE_QVGA;      // 320×240
+    cam_cfg.pixel_format  = PIXFORMAT_RGB565;
+    cam_cfg.grab_mode     = CAMERA_GRAB_WHEN_EMPTY;
+    cam_cfg.fb_location   = CAMERA_FB_IN_PSRAM;
+    cam_cfg.jpeg_quality  = 12;
+    cam_cfg.fb_count      = 2;
+
+    LOG_I("[CAM] esp_camera_init start, FRAME_LEN=%u (%ux240x2)",
+          (unsigned)(SCREEN_WIDTH * 240u * 2u), SCREEN_WIDTH);
+
+    esp_err_t cam_err = esp_camera_init(&cam_cfg);
+    LOG_I("[CAM] esp_camera_init ret=0x%x", (unsigned)cam_err);
+    if (cam_err != ESP_OK) {
+        char msg[128];
+        snprintf(msg, sizeof(msg),
+                 "Camera Init Failed\n\nerr: 0x%02x\n\n"
+                 "Check CAM_* pins\nor camera module.", (int)cam_err);
+        show_body_error(msg);
+        return _auto_or_verdict(false) ? Result::PASS : Result::FAIL;
+    }
+
+    sensor_t *sensor = esp_camera_sensor_get();
+    if (!sensor) {
+        LOG_I("[CAM] sensor_get returned NULL");
+        show_body_error(
+            "Camera sensor\nnot detected.\n\n"
+            "Check module connection.");
+        esp_camera_deinit();
+        return _auto_or_verdict(false) ? Result::PASS : Result::FAIL;
+    }
+    LOG_I("[CAM] sensor PID=0x%02x", sensor->id.PID);
+    sensor->set_vflip(sensor, 1);
+
+    // ── Build live-view screen ────────────────────────────────────────────────
+    // Layout: title bar 40 px (buttons only) + camera image area 200 px.
+    // Buttons live in the title bar so the full body area is available for the
+    // live preview.  Title bar inner width = 320 − 2×4 = 312 px:
+    //   FAIL btn  105 px, left-aligned (+2 offset)
+    //   PASS btn  193 px, right-aligned (−2 offset)
+    //   gap ≈ 10 px between them.
+    constexpr uint16_t TITLE_H = 40;
+
+    _verdict = -1;
+    lv_obj_t *cam_img_obj = nullptr;
+    lv_obj_t *err_lbl_obj = nullptr;
+    lv_obj_t *fps_lbl_obj = nullptr;
+
+    if (!LVGL_LOCK(500)) {
+        esp_camera_deinit();
+        return Result::SKIP;
+    }
+    {
+        lv_obj_t *scr = lv_obj_create(nullptr);
+        lv_obj_set_style_bg_color(scr, lv_color_hex(0x000000), 0);
+        lv_obj_set_style_bg_opa(scr, LV_OPA_COVER, 0);
+        lv_obj_set_style_border_width(scr, 0, 0);
+        lv_obj_clear_flag(scr, LV_OBJ_FLAG_SCROLLABLE);
+
+        // ── Camera image widget ────────────────────────────────────────────────
+        // Created first so that the title bar (created below) renders on top.
+        // Rotated CCW 90° (LVGL angle 2700 = CW 270°) around the image centre.
+        // y=20 positions the rotation pivot at screen y=140, which is the centre
+        // of the 200 px area available below the title bar (y=40..240).
+        // After rotation the QVGA 320×240 image occupies a 240×320 visual area;
+        // the 40 px behind the title bar and the bottom 60 px off-screen are clipped.
+        cam_img_obj = lv_img_create(scr);
+        lv_obj_set_pos(cam_img_obj, 0, 20);
+        lv_img_set_pivot(cam_img_obj, SCREEN_WIDTH / 2, 240 / 2);  // centre of QVGA (160, 120)
+        lv_img_set_angle(cam_img_obj, 2700);                        // CCW 90°
+        // After CCW 90° the QVGA 320×240 renders as 240 wide × 320 tall.
+        // zoom 341 (≈ 320/240 × 256) scales the width up to fill 320 px;
+        // the resulting ~426 px height overflows and is clipped at the screen edges.
+        lv_img_set_zoom(cam_img_obj, 341);
+
+        // ── FPS counter (top-right of image area, below title bar) ────────────
+        fps_lbl_obj = lv_label_create(scr);
+        lv_obj_set_style_text_color(fps_lbl_obj, lv_color_hex(0xFFFFFF), 0);
+        lv_obj_set_style_text_font(fps_lbl_obj, &lv_font_montserrat_14, 0);
+        lv_obj_set_style_bg_color(fps_lbl_obj, lv_color_hex(0x000000), 0);
+        lv_obj_set_style_bg_opa(fps_lbl_obj, LV_OPA_50, 0);
+        lv_obj_set_style_pad_hor(fps_lbl_obj, 4, 0);
+        lv_obj_set_style_pad_ver(fps_lbl_obj, 2, 0);
+        lv_obj_set_style_radius(fps_lbl_obj, 3, 0);
+        lv_label_set_text(fps_lbl_obj, "-- FPS");
+        lv_obj_align(fps_lbl_obj, LV_ALIGN_TOP_RIGHT, -4, TITLE_H + 4);
+
+        // ── Error overlay (hidden until streaming fails) ───────────────────────
+        err_lbl_obj = lv_label_create(scr);
+        lv_obj_set_style_text_color(err_lbl_obj, lv_color_hex(COLOR_FAIL), 0);
+        lv_obj_set_style_text_font(err_lbl_obj, &lv_font_montserrat_16, 0);
+        lv_obj_set_style_text_align(err_lbl_obj, LV_TEXT_ALIGN_CENTER, 0);
+        lv_obj_set_width(err_lbl_obj, SCREEN_WIDTH - 24);
+        lv_obj_align(err_lbl_obj, LV_ALIGN_CENTER, 0, 20);
+        lv_label_set_text(err_lbl_obj, "");
+        lv_obj_add_flag(err_lbl_obj, LV_OBJ_FLAG_HIDDEN);
+
+        // ── Title bar (created last → highest z-order, renders over camera) ────
+        lv_obj_t *tb = lv_obj_create(scr);
+        lv_obj_set_size(tb, SCREEN_WIDTH, TITLE_H);
+        lv_obj_align(tb, LV_ALIGN_TOP_MID, 0, 0);
+        lv_obj_set_style_bg_color(tb, lv_color_hex(COLOR_TITLE_BG), 0);
+        lv_obj_set_style_border_width(tb, 0, 0);
+        lv_obj_set_style_radius(tb, 0, 0);
+        lv_obj_set_style_pad_all(tb, 4, 0);
+        lv_obj_clear_flag(tb, LV_OBJ_FLAG_SCROLLABLE);
+
+        // FAIL button (left side of title bar)
+        lv_obj_t *tb_fail = lv_btn_create(tb);
+        lv_obj_set_size(tb_fail, 105, 30);
+        lv_obj_align(tb_fail, LV_ALIGN_LEFT_MID, 2, 0);
+        lv_obj_set_style_bg_color(tb_fail, lv_color_hex(COLOR_FAIL), 0);
+        lv_obj_set_style_bg_color(tb_fail, lv_color_hex(0xC0392B), LV_STATE_PRESSED);
+        lv_obj_set_style_border_width(tb_fail, 0, 0);
+        lv_obj_set_style_radius(tb_fail, 6, 0);
+        lv_obj_add_event_cb(tb_fail, _on_fail_btn, LV_EVENT_CLICKED, this);
+        lv_obj_t *tb_fail_lbl = lv_label_create(tb_fail);
+        lv_label_set_text(tb_fail_lbl, LV_SYMBOL_CLOSE "  FAIL");
+        lv_obj_set_style_text_font(tb_fail_lbl, &lv_font_montserrat_14, 0);
+        lv_obj_set_style_text_color(tb_fail_lbl, lv_color_hex(0xFFFFFF), 0);
+        lv_obj_center(tb_fail_lbl);
+
+        // PASS button (right side of title bar, wider)
+        lv_obj_t *tb_pass = lv_btn_create(tb);
+        lv_obj_set_size(tb_pass, 193, 30);
+        lv_obj_align(tb_pass, LV_ALIGN_RIGHT_MID, -2, 0);
+        lv_obj_set_style_bg_color(tb_pass, lv_color_hex(COLOR_PASS), 0);
+        lv_obj_set_style_bg_color(tb_pass, lv_color_hex(0x27AE60), LV_STATE_PRESSED);
+        lv_obj_set_style_border_width(tb_pass, 0, 0);
+        lv_obj_set_style_radius(tb_pass, 6, 0);
+        lv_obj_add_event_cb(tb_pass, _on_ok_btn, LV_EVENT_CLICKED, this);
+        lv_obj_t *tb_pass_lbl = lv_label_create(tb_pass);
+        lv_label_set_text(tb_pass_lbl, LV_SYMBOL_OK "  PASS >> Continue");
+        lv_obj_set_style_text_font(tb_pass_lbl, &lv_font_montserrat_14, 0);
+        lv_obj_set_style_text_color(tb_pass_lbl, lv_color_hex(0xFFFFFF), 0);
+        lv_obj_center(tb_pass_lbl);
+
+        lv_scr_load(scr);
+    }
+    LVGL_UNLOCK();
+
+    // ── Streaming loop ────────────────────────────────────────────────────────
+    // img_dsc is kept on the stack for the duration of the loop; LVGL stores a
+    // pointer to it so it must remain valid until the loop exits.
+    constexpr size_t FRAME_LEN = (size_t)SCREEN_WIDTH * 240u * 2u;   // QVGA RGB565
+
+    lv_img_dsc_t img_dsc = {};
+    img_dsc.header.always_zero = 0;
+    img_dsc.header.w           = SCREEN_WIDTH;   // 320
+    img_dsc.header.h           = 240;
+    img_dsc.data_size          = FRAME_LEN;
+    img_dsc.header.cf          = LV_IMG_CF_TRUE_COLOR;
+
+    LOG_I("[CAM] enter stream loop, FRAME_LEN=%u, cam_img_obj=%p", (unsigned)FRAME_LEN, cam_img_obj);
+
+    // Double-buffer safety: keep prev_fb alive until img_dsc.data has been
+    // updated to the next frame AND LVGL has been notified.  We return prev_fb
+    // (from the previous iteration) only after img_dsc already points to the
+    // new buffer, so LVGL never reads from a freed camera buffer.
+    camera_fb_t *prev_fb   = nullptr;
+    uint32_t     frame_cnt = 0;
+    uint32_t     err_cnt   = 0;
+    bool         err_shown = false;
+    uint32_t     fps_ms    = millis();
+    uint32_t     fps_count = 0;
+
+    while (_verdict < 0) {
+        camera_fb_t *fb = esp_camera_fb_get();
+
+        if (fb && fb->len == FRAME_LEN) {
+            if (frame_cnt == 0) {
+                LOG_I("[CAM] first valid frame: buf=%p len=%u w=%u h=%u fmt=%d",
+                      fb->buf, (unsigned)fb->len,
+                      (unsigned)fb->width, (unsigned)fb->height, (int)fb->format);
+            }
+            // Fix RGB565 byte order (camera big-endian → LVGL little-endian).
+            // Process 2 pixels per 32-bit word; compiler can auto-vectorize.
+            {
+                uint32_t *p32 = reinterpret_cast<uint32_t *>(fb->buf);
+                for (uint32_t i = 0, n = fb->len >> 2; i < n; i++) {
+                    uint32_t w = p32[i];
+                    p32[i] = ((w & 0xFF00FF00u) >> 8) | ((w & 0x00FF00FFu) << 8);
+                }
+            }
+            img_dsc.data = fb->buf;
+            if (LVGL_LOCK(10)) {
+                lv_img_set_src(cam_img_obj, &img_dsc);
+                if (frame_cnt == 0) LOG_I("[CAM] lv_img_set_src called OK");
+                if (err_shown) {
+                    lv_obj_add_flag(err_lbl_obj, LV_OBJ_FLAG_HIDDEN);
+                    err_shown = false;
+                }
+                LVGL_UNLOCK();
+            } else {
+                if (frame_cnt < 5) LOG_W("[CAM] LVGL lock timeout, frame_cnt=%u", frame_cnt);
+            }
+            // Now safe to return the previous buffer (LVGL will render new one).
+            if (prev_fb) {
+                esp_camera_fb_return(prev_fb);
+            }
+            prev_fb = fb;
+            frame_cnt++;
+            fps_count++;
+            err_cnt = 0;
+            // Update FPS label once per second
+            {
+                uint32_t now_ms = millis();
+                if (now_ms - fps_ms >= 1000) {
+                    int fps_int = (int)(fps_count * 1000u / (now_ms - fps_ms));
+                    fps_ms    = now_ms;
+                    fps_count = 0;
+                    if (fps_lbl_obj && LVGL_LOCK(10)) {
+                        char fps_buf[12];
+                        snprintf(fps_buf, sizeof(fps_buf), "%d FPS", fps_int);
+                        lv_label_set_text(fps_lbl_obj, fps_buf);
+                        LVGL_UNLOCK();
+                    }
+                }
+            }
+        } else {
+            if (frame_cnt < 5 || err_cnt < 5) {
+                LOG_W("[CAM] bad frame: fb=%p len=%u (expect %u) err_cnt=%u frame_cnt=%u",
+                      fb, fb ? (unsigned)fb->len : 0u, (unsigned)FRAME_LEN,
+                      err_cnt, frame_cnt);
+            }
+            if (fb) esp_camera_fb_return(fb);
+            err_cnt++;
+            // After 20 consecutive failures with zero successful frames,
+            // show an error overlay so the operator knows what went wrong.
+            if (!err_shown && frame_cnt == 0 && err_cnt >= 20) {
+                LOG_E("[CAM] no valid frames after %u attempts", err_cnt);
+                if (LVGL_LOCK(50)) {
+                    lv_label_set_text(err_lbl_obj,
+                        "Camera stream error\n\n"
+                        "No valid frames received\n\n"
+                        "Press FAIL to continue");
+                    lv_obj_clear_flag(err_lbl_obj, LV_OBJ_FLAG_HIDDEN);
+                    LVGL_UNLOCK();
+                }
+                err_shown = true;
+            }
+        }
+
+        vTaskDelay(pdMS_TO_TICKS(33));   // ~30 fps target
+    }
+
+    // Cleanup: return any held frame buffer, allow LVGL one last render cycle.
+    if (prev_fb) esp_camera_fb_return(prev_fb);
+    vTaskDelay(pdMS_TO_TICKS(50));
+    esp_camera_deinit();
+
+    return (_verdict == 1) ? Result::PASS : Result::FAIL;
 }
 
 FactoryTest::Result FactoryTest::_test_audio()
