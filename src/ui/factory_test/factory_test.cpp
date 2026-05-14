@@ -1940,12 +1940,12 @@ FactoryTest::Result FactoryTest::_test_camera()
             {
                 uint32_t now_ms = millis();
                 if (now_ms - fps_ms >= 1000) {
-                    int fps_int = (int)(fps_count * 1000u / (now_ms - fps_ms));
+                    float fps_f = fps_count * 1000.0f / (float)(now_ms - fps_ms);
                     fps_ms    = now_ms;
                     fps_count = 0;
                     if (fps_lbl_obj && LVGL_LOCK(10)) {
                         char fps_buf[12];
-                        snprintf(fps_buf, sizeof(fps_buf), "%d FPS", fps_int);
+                        snprintf(fps_buf, sizeof(fps_buf), "%.1f FPS", fps_f);
                         lv_label_set_text(fps_lbl_obj, fps_buf);
                         LVGL_UNLOCK();
                     }
