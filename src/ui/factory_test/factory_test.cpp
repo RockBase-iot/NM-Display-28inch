@@ -746,28 +746,119 @@ FactoryTest::Result FactoryTest::_test_imu()
     constexpr uint8_t QMI8658_ADDR = 0x6B;
     _show_screen(5, "IMU (QMI8658)", "Probing I2C...", Result::SKIP);
 
+    // Helper: show error text in red, centered in the test body area.
+    auto show_error = [&](const char *text) {
+        if (!LVGL_LOCK(500)) return;
+        lv_obj_t *lbl   = static_cast<lv_obj_t *>(_lv_body_label);
+        lv_obj_t *panel = static_cast<lv_obj_t *>(_lv_body_panel);
+        lv_obj_clear_flag(panel, LV_OBJ_FLAG_SCROLLABLE);
+        lv_label_set_text(lbl, text);
+        lv_obj_set_style_text_color(lbl, lv_color_hex(COLOR_FAIL), 0);
+        lv_obj_set_style_text_align(lbl, LV_TEXT_ALIGN_CENTER, 0);
+        lv_obj_set_width(lbl, SCREEN_WIDTH - 24);
+        lv_obj_align(lbl, LV_ALIGN_CENTER, 0, 0);
+        LVGL_UNLOCK();
+    };
+
+    // ── Step 1: I2C probe ─────────────────────────────────────────────────
     if (!i2c_probe(QMI8658_ADDR)) {
-        _update_screen("I2C 0x6B     #E74C3C FAIL #\nNo ACK", Result::FAIL);
+        show_error("IMU Not Found\n\nAddr:  0x6B\nNo I2C ACK");
         return _auto_or_verdict(false) ? Result::PASS : Result::FAIL;
     }
 
-    // Read WHO_AM_I (register 0x00) — QMI8658A returns 0x05.
+    // ── Step 2: WHO_AM_I check ────────────────────────────────────────────
     Wire.beginTransmission(QMI8658_ADDR);
     Wire.write(0x00);
     Wire.endTransmission(false);
     Wire.requestFrom(QMI8658_ADDR, (uint8_t)1);
     uint8_t who = Wire.available() ? Wire.read() : 0xFF;
-    bool ok = (who == 0x05);
 
-    char l1[40], l2[40], l3[40], l4[40], msg[200];
-    snprintf(l1, sizeof(l1), "%-13s#2ECC71 OK   #", "I2C 0x6B");
-    snprintf(l2, sizeof(l2), "%-13s0x%02X",          "WHO_AM_I",  who);
-    snprintf(l3, sizeof(l3), "%-13s0x05",            "Expected");
-    snprintf(l4, sizeof(l4), "%-13s#%s %-5s#",       "Match",
-             ok ? "2ECC71" : "E74C3C", ok ? "OK" : "FAIL");
-    snprintf(msg, sizeof(msg), "%s\n%s\n%s\n%s", l1, l2, l3, l4);
-    _update_screen(msg, ok ? Result::PASS : Result::FAIL);
-    return _auto_or_verdict(ok) ? Result::PASS : Result::FAIL;
+    if (who != 0x05) {
+        char err[80];
+        snprintf(err, sizeof(err),
+                 "IMU ID Mismatch\n\nAddr:   0x6B\nID:     0x%02X\nExpect: 0x05", who);
+        show_error(err);
+        return _auto_or_verdict(false) ? Result::PASS : Result::FAIL;
+    }
+
+    // ── Step 3: Initialize QMI8658 ────────────────────────────────────────
+    auto write_reg = [&](uint8_t reg, uint8_t val) {
+        Wire.beginTransmission(QMI8658_ADDR);
+        Wire.write(reg);
+        Wire.write(val);
+        Wire.endTransmission();
+    };
+
+    write_reg(0x02, 0x60);   // CTRL1: auto-increment, little-endian output
+    write_reg(0x03, 0x25);   // CTRL2: Accel ±8g (aFS=010), ODR=500Hz (0101)
+    write_reg(0x04, 0x55);   // CTRL3: Gyro ±512dps (gFS=101), ODR=500Hz (0101)
+    write_reg(0x08, 0x03);   // CTRL7: AccEn | GyrEn
+    vTaskDelay(pdMS_TO_TICKS(50));
+
+    // ±8g  → 32768/8  = 4096 LSB/g  → scale = 1/4096
+    // ±512dps → 32768/512 = 64 LSB/dps → scale = 1/64
+    constexpr float ACC_SCALE = 1.0f / 4096.0f;
+    constexpr float GYR_SCALE = 1.0f / 64.0f;
+
+    // Float formatter: outputs ±NNN.NNN (8 chars, no unit), avoids %f.
+    auto fmt8 = [](char *b, int sz, float v) {
+        bool neg = (v < 0.0f);
+        float av = neg ? -v : v;
+        int iv = (int)av;
+        int fv = (int)((av - (float)iv) * 1000.0f + 0.5f);
+        if (fv >= 1000) { iv++; fv = 0; }
+        snprintf(b, sz, "%c%3d.%03d", neg ? '-' : '+', iv, fv);
+    };
+
+    // ── Step 4: Live refresh loop ─────────────────────────────────────────
+    _add_verdict_buttons(true);   // PASS >> Continue (non-blocking)
+
+    while (_verdict < 0) {
+        // Burst-read 12 bytes: AX_L(0x35) … GZ_H(0x40)
+        Wire.beginTransmission(QMI8658_ADDR);
+        Wire.write(0x35);
+        Wire.endTransmission(false);
+        Wire.requestFrom(QMI8658_ADDR, (uint8_t)12);
+
+        int16_t ax = 0, ay = 0, az = 0, gx = 0, gy = 0, gz = 0;
+        if (Wire.available() >= 12) {
+            uint8_t buf[12];
+            for (int i = 0; i < 12; i++) buf[i] = (uint8_t)Wire.read();
+            ax = (int16_t)((uint16_t)(buf[1] << 8) | buf[0]);
+            ay = (int16_t)((uint16_t)(buf[3] << 8) | buf[2]);
+            az = (int16_t)((uint16_t)(buf[5] << 8) | buf[4]);
+            gx = (int16_t)((uint16_t)(buf[7] << 8) | buf[6]);
+            gy = (int16_t)((uint16_t)(buf[9] << 8) | buf[8]);
+            gz = (int16_t)((uint16_t)(buf[11] << 8) | buf[10]);
+        }
+
+        // Each value: ±NNN.NNN (8 chars)
+        char sax[12], say[12], saz[12], sgx[12], sgy[12], sgz[12];
+        fmt8(sax, sizeof(sax), ax * ACC_SCALE);
+        fmt8(say, sizeof(say), ay * ACC_SCALE);
+        fmt8(saz, sizeof(saz), az * ACC_SCALE);
+        fmt8(sgx, sizeof(sgx), gx * GYR_SCALE);
+        fmt8(sgy, sizeof(sgy), gy * GYR_SCALE);
+        fmt8(sgz, sizeof(sgz), gz * GYR_SCALE);
+
+        // Two-column layout: Accel(g) left | Gyro(dps) right
+        // Each line: "X:±NNN.NNN g    X:±NNN.NNN dps"
+        // Monospace Inconsolata_16 ~9px/char; 320-24=296px usable → ~32 chars/line
+        char msg[200];
+        snprintf(msg, sizeof(msg),
+                 " Accel(g)    Gyro(dps)\n"
+                 "X:%s  %s\n"
+                 "Y:%s  %s\n"
+                 "Z:%s  %s",
+                 sax, sgx,
+                 say, sgy,
+                 saz, sgz);
+
+        _update_screen(msg, Result::PASS);
+        vTaskDelay(pdMS_TO_TICKS(20));
+    }
+
+    return Result::PASS;
 }
 
 FactoryTest::Result FactoryTest::_test_pmu()
