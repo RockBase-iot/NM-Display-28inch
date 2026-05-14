@@ -13,6 +13,8 @@
 #include <SD_MMC.h>
 #include <SPIFFS.h>
 #include <esp_camera.h>
+#include <driver/i2s.h>
+#include <math.h>
 #include "../fonts/fonts.h"
 
 // ─── Colour palette used across test screens ─────────────────────────────────
@@ -409,7 +411,8 @@ void FactoryTest::_run_all()
         { "PMU",      &FactoryTest::_test_pmu      },
         { "RTC",      &FactoryTest::_test_rtc      },
         { "Camera",   &FactoryTest::_test_camera   },
-        { "Audio",    &FactoryTest::_test_audio    },
+        { "Codec",    &FactoryTest::_test_codec    },
+        { "Mic",      &FactoryTest::_test_mic      },
     };
     constexpr int TOTAL = sizeof(cases) / sizeof(cases[0]);
 
@@ -1986,32 +1989,544 @@ FactoryTest::Result FactoryTest::_test_camera()
     return (_verdict == 1) ? Result::PASS : Result::FAIL;
 }
 
-FactoryTest::Result FactoryTest::_test_audio()
+FactoryTest::Result FactoryTest::_test_codec()
 {
-    _show_screen(9, "Audio (ES8311)", "Probing I2C 0x18...", Result::SKIP);
+    _show_screen(9, "Codec (ES8311)", "Probing I2C 0x18...", Result::SKIP);
 
+    // ── I2C probe ─────────────────────────────────────────────────────────────
     if (!i2c_probe(ES8311_I2C_ADDR)) {
         _update_screen("I2C 0x18     #E74C3C FAIL #\nES8311 not found", Result::FAIL);
         return _auto_or_verdict(false) ? Result::PASS : Result::FAIL;
     }
 
-    // Read chip ID registers (0xFD / 0xFE) — ES8311 returns 0x83 / 0x11.
+    // ── Chip ID check (0xFD=0x83, 0xFE=0x11) ─────────────────────────────────
+    // ES8311 does NOT auto-increment registers; must read each separately.
     Wire.beginTransmission(ES8311_I2C_ADDR);
     Wire.write(0xFD);
     Wire.endTransmission(false);
-    Wire.requestFrom(ES8311_I2C_ADDR, (uint8_t)2);
+    Wire.requestFrom(ES8311_I2C_ADDR, (uint8_t)1);
     uint8_t id0 = Wire.available() ? Wire.read() : 0xFF;
-    uint8_t id1 = Wire.available() ? Wire.read() : 0xFF;
-    bool i2c_ok = (id0 == 0x83 && id1 == 0x11);
 
-    char l1[40], l2[40], l3[40], l4[40], msg[256];
-    snprintf(l1, sizeof(l1), "%-13s#2ECC71 OK   #",  "I2C 0x18");
-    snprintf(l2, sizeof(l2), "%-13s0x%02X  #%s %-5s#", "ID[FD]",  id0,
-             (id0==0x83)?"2ECC71":"E74C3C", (id0==0x83)?"OK":"FAIL");
-    snprintf(l3, sizeof(l3), "%-13s0x%02X  #%s %-5s#", "ID[FE]",  id1,
-             (id1==0x11)?"2ECC71":"E74C3C", (id1==0x11)?"OK":"FAIL");
-    snprintf(l4, sizeof(l4), "%-13s#7F8C8D TODO #",   "I2S test");
-    snprintf(msg, sizeof(msg), "%s\n%s\n%s\n%s", l1, l2, l3, l4);
-    _update_screen(msg, i2c_ok ? Result::PASS : Result::FAIL);
-    return _auto_or_verdict(i2c_ok) ? Result::PASS : Result::FAIL;
+    Wire.beginTransmission(ES8311_I2C_ADDR);
+    Wire.write(0xFE);
+    Wire.endTransmission(false);
+    Wire.requestFrom(ES8311_I2C_ADDR, (uint8_t)1);
+    uint8_t id1 = Wire.available() ? Wire.read() : 0xFF;
+    bool id_ok  = (id0 == 0x83 && id1 == 0x11);
+    LOG_I("[CODEC] ES8311 ID: 0x%02X 0x%02X %s", id0, id1, id_ok ? "OK" : "MISMATCH");
+
+    {
+        char mbuf[128];
+        snprintf(mbuf, sizeof(mbuf),
+                 "ID[FD]=0x%02X #%s %s#\nID[FE]=0x%02X #%s %s#",
+                 id0, (id0==0x83)?"2ECC71":"E74C3C", (id0==0x83)?"OK":"FAIL",
+                 id1, (id1==0x11)?"2ECC71":"E74C3C", (id1==0x11)?"OK":"FAIL");
+        if (!id_ok) {
+            char full[160];
+            snprintf(full, sizeof(full), "%s\nES8311 ID mismatch", mbuf);
+            _update_screen(full, Result::FAIL);
+            return _auto_or_verdict(false) ? Result::PASS : Result::FAIL;
+        }
+        _update_screen(mbuf, Result::SKIP);
+    }
+
+    // ── ES8311 init for DAC playback only ────────────────────────────────────
+    auto codec_wr = [](uint8_t reg, uint8_t val) {
+        Wire.beginTransmission(ES8311_I2C_ADDR);
+        Wire.write(reg); Wire.write(val);
+        return Wire.endTransmission() == 0;
+    };
+    auto codec_rd = [](uint8_t reg) -> uint8_t {
+        Wire.beginTransmission(ES8311_I2C_ADDR);
+        Wire.write(reg);
+        Wire.endTransmission(false);
+        Wire.requestFrom(ES8311_I2C_ADDR, (uint8_t)1);
+        return Wire.available() ? Wire.read() : 0xFF;
+    };
+
+    // ── PA control via TCA9554 IO7 ────────────────────────────────────────────
+    // Config reg 0x03: IO1=output(LCD RST), IO7=output(PA_CTRL), others=input
+    //   0b0111_1101 = 0x7D
+    // Output reg 0x01: IO1=1(LCD not in reset), IO7=1(PA ON) => 0x82
+    //                  IO1=1, IO7=0 (PA OFF)                 => 0x02
+    auto tca_pa_ctrl = [](bool enable) {
+        Wire.beginTransmission(TCA9554_I2C_ADDR);
+        Wire.write(0x03); Wire.write(0x7D);   // IO1+IO7 as output
+        Wire.endTransmission();
+        Wire.beginTransmission(TCA9554_I2C_ADDR);
+        Wire.write(0x01);
+        Wire.write(enable ? (uint8_t)0x82 : (uint8_t)0x02);  // IO7 on/off, IO1 always high
+        Wire.endTransmission();
+        LOG_I("[CODEC] PA_CTRL (TCA9554 IO7) = %s", enable ? "ON" : "OFF");
+    };
+
+    codec_wr(0x44, 0x08);
+    codec_wr(0x44, 0x08);
+    codec_wr(0x01, 0x30);
+    codec_wr(0x02, 0x00);
+    codec_wr(0x03, 0x10);
+    codec_wr(0x16, 0x24);
+    codec_wr(0x04, 0x20);
+    codec_wr(0x05, 0x00);
+    codec_wr(0x0B, 0x00);
+    codec_wr(0x0C, 0x00);
+    codec_wr(0x10, 0x1F);
+    codec_wr(0x11, 0x7F);
+    codec_wr(0x00, 0x80);  // normal op, slave mode
+    codec_wr(0x01, 0x3F);  // use external MCLK
+    codec_wr(0x07, 0x00);  // lrck_h=0
+    codec_wr(0x08, 0xFF);  // lrck_l=0xFF  (LRCK_DIV=256 @ 16kHz)
+    codec_wr(0x06, 0x03);  // bclk_div=4
+    codec_wr(0x09, 0x0C);  // SDPIN:  16-bit I2S
+    codec_wr(0x0A, 0x0C);  // SDPOUT: 16-bit I2S
+    codec_wr(0x13, 0x10);
+    codec_wr(0x1B, 0x0A);
+    codec_wr(0x1C, 0x6A);
+    codec_wr(0x44, 0x58);
+    codec_wr(0x17, 0xBF);  // ADC volume (not used for TX-only, kept for completeness)
+    codec_wr(0x0E, 0x02);
+    codec_wr(0x12, 0x00);  // enable DAC
+    codec_wr(0x14, 0x1A);  // no DMIC, analog PGA
+    codec_wr(0x0D, 0x01);  // power up
+    codec_wr(0x15, 0x40);
+    codec_wr(0x31, 0x00);  // DAC unmute
+    codec_wr(0x37, 0x08);  // DAC ramp rate
+    codec_wr(0x45, 0x00);
+    codec_wr(0x32, 0xFF);  // DAC volume max (+32 dB) for tone playback
+    LOG_I("[CODEC] ES8311 DAC regs: REG00=0x%02X REG0A=0x%02X REG32=0x%02X",
+          codec_rd(0x00), codec_rd(0x0A), codec_rd(0x32));
+
+    // ── I2S TX only ──────────────────────────────────────────────────────────
+    i2s_config_t i2s_cfg = {};
+    i2s_cfg.mode                 = (i2s_mode_t)(I2S_MODE_MASTER | I2S_MODE_TX);
+    i2s_cfg.sample_rate          = I2S_SAMPLE_RATE;
+    i2s_cfg.bits_per_sample      = I2S_BITS_PER_SAMPLE_16BIT;
+    i2s_cfg.channel_format       = I2S_CHANNEL_FMT_RIGHT_LEFT;
+    i2s_cfg.communication_format = I2S_COMM_FORMAT_STAND_I2S;
+    i2s_cfg.intr_alloc_flags     = ESP_INTR_FLAG_LEVEL1;
+    i2s_cfg.dma_buf_count        = 4;
+    i2s_cfg.dma_buf_len          = 512;
+    i2s_cfg.use_apll             = false;
+    i2s_cfg.tx_desc_auto_clear   = true;
+    i2s_cfg.mclk_multiple        = I2S_MCLK_MULTIPLE_256;
+
+    i2s_pin_config_t pin_cfg = {};
+    pin_cfg.mck_io_num   = I2S_MCLK_PIN;
+    pin_cfg.bck_io_num   = I2S_BCLK_PIN;
+    pin_cfg.ws_io_num    = I2S_LRCK_PIN;
+    pin_cfg.data_out_num = I2S_DOUT_PIN;
+    pin_cfg.data_in_num  = I2S_PIN_NO_CHANGE;
+
+    {
+        esp_err_t err = i2s_driver_install(I2S_NUM_0, &i2s_cfg, 0, NULL);
+        if (err != ESP_OK) {
+            char emsg[64];
+            snprintf(emsg, sizeof(emsg), "I2S install failed\nerr=0x%04X", err);
+            _update_screen(emsg, Result::FAIL);
+            return _auto_or_verdict(false) ? Result::PASS : Result::FAIL;
+        }
+        err = i2s_set_pin(I2S_NUM_0, &pin_cfg);
+        if (err != ESP_OK) {
+            i2s_driver_uninstall(I2S_NUM_0);
+            char emsg[64];
+            snprintf(emsg, sizeof(emsg), "I2S pin cfg failed\nerr=0x%04X", err);
+            _update_screen(emsg, Result::FAIL);
+            return _auto_or_verdict(false) ? Result::PASS : Result::FAIL;
+        }
+    }
+
+    // ── Build playback screen: status + PASS/FAIL buttons ────────────────────
+    constexpr uint16_t TITLE_H = 40;
+    _verdict = -1;
+
+    lv_obj_t *status_lbl = nullptr;
+
+    if (LVGL_LOCK(500)) {
+        lv_obj_t *scr = lv_obj_create(nullptr);
+        lv_obj_set_style_bg_color(scr, lv_color_hex(COLOR_BG), 0);
+        lv_obj_set_style_bg_opa(scr, LV_OPA_COVER, 0);
+        lv_obj_clear_flag(scr, LV_OBJ_FLAG_SCROLLABLE);
+
+        status_lbl = lv_label_create(scr);
+        lv_label_set_recolor(status_lbl, true);
+        lv_obj_set_style_text_color(status_lbl, lv_color_hex(COLOR_TEXT), 0);
+        lv_obj_set_style_text_font(status_lbl, &lv_font_montserrat_16, 0);
+        lv_label_set_text(status_lbl, "Playing 1kHz tone...\nDo you hear audio?");
+        lv_obj_set_width(status_lbl, SCREEN_WIDTH - 20);
+        lv_label_set_long_mode(status_lbl, LV_LABEL_LONG_WRAP);
+        lv_obj_align(status_lbl, LV_ALIGN_CENTER, 0, 10);
+
+        // Title bar
+        lv_obj_t *tb = lv_obj_create(scr);
+        lv_obj_set_size(tb, SCREEN_WIDTH, TITLE_H);
+        lv_obj_set_pos(tb, 0, 0);
+        lv_obj_set_style_bg_color(tb, lv_color_hex(COLOR_TITLE_BG), 0);
+        lv_obj_set_style_bg_opa(tb, LV_OPA_COVER, 0);
+        lv_obj_set_style_border_width(tb, 0, 0);
+        lv_obj_set_style_radius(tb, 0, 0);
+        lv_obj_clear_flag(tb, LV_OBJ_FLAG_SCROLLABLE);
+
+        lv_obj_t *tb_title = lv_label_create(tb);
+        lv_obj_set_style_text_color(tb_title, lv_color_hex(COLOR_TEXT), 0);
+        lv_obj_set_style_text_font(tb_title, &lv_font_montserrat_16, 0);
+        lv_label_set_text(tb_title, "Test 9/10: Codec (ES8311)");
+        lv_obj_align(tb_title, LV_ALIGN_CENTER, 0, 0);
+
+        // FAIL button (left)
+        lv_obj_t *tb_fail = lv_btn_create(tb);
+        lv_obj_set_size(tb_fail, 105, 30);
+        lv_obj_align(tb_fail, LV_ALIGN_LEFT_MID, 2, 0);
+        lv_obj_set_style_bg_color(tb_fail, lv_color_hex(COLOR_FAIL), 0);
+        lv_obj_add_event_cb(tb_fail, _on_fail_btn, LV_EVENT_ALL, this);
+        lv_obj_t *tb_fl = lv_label_create(tb_fail);
+        lv_label_set_text(tb_fl, LV_SYMBOL_CLOSE " Failed");
+        lv_obj_center(tb_fl);
+
+        // PASS button (right)
+        lv_obj_t *tb_pass = lv_btn_create(tb);
+        lv_obj_set_size(tb_pass, 193, 30);
+        lv_obj_align(tb_pass, LV_ALIGN_RIGHT_MID, -2, 0);
+        lv_obj_set_style_bg_color(tb_pass, lv_color_hex(COLOR_PASS), 0);
+        lv_obj_add_event_cb(tb_pass, _on_ok_btn, LV_EVENT_ALL, this);
+        lv_obj_t *tb_pl = lv_label_create(tb_pass);
+        lv_label_set_text(tb_pl, LV_SYMBOL_OK " Ok");
+        lv_obj_center(tb_pl);
+
+        lv_scr_load(scr);
+        LVGL_UNLOCK();
+    }
+
+    // ── Enable PA amplifier ─────────────────────────────────────────────────
+    tca_pa_ctrl(true);
+    vTaskDelay(pdMS_TO_TICKS(50));   // let PA settle before audio
+
+    // ── Generate 1kHz sine wave and stream continuously until verdict ─────────
+    // Chunk = 256 stereo frames = 1024 bytes ≈ 16 ms @ 16 kHz
+    constexpr int     CHUNK_FRAMES = 256;
+    constexpr int     SR           = I2S_SAMPLE_RATE;
+    constexpr float   FREQ_HZ      = 1000.0f;
+    constexpr int16_t AMPLITUDE    = 12000;
+    constexpr float   PHASE_INC    = 2.0f * (float)M_PI * FREQ_HZ / (float)SR;
+
+    static int16_t tone_buf[CHUNK_FRAMES * 2];  // static: no stack pressure
+    float phase = 0.0f;
+
+    while (_verdict < 0) {
+        // Fill chunk with 1kHz sine (stereo L=R)
+        for (int i = 0; i < CHUNK_FRAMES; i++) {
+            int16_t s = (int16_t)(AMPLITUDE * sinf(phase));
+            tone_buf[i * 2]     = s;
+            tone_buf[i * 2 + 1] = s;
+            phase += PHASE_INC;
+            if (phase >= 2.0f * (float)M_PI) phase -= 2.0f * (float)M_PI;
+        }
+        size_t bw = 0;
+        i2s_write(I2S_NUM_0, tone_buf, sizeof(tone_buf), &bw, pdMS_TO_TICKS(50));
+    }
+
+    // ── Cleanup ───────────────────────────────────────────────────────────────
+    tca_pa_ctrl(false);            // disable PA first
+    // Power down ES8311 DAC gracefully
+    codec_wr(0x32, 0x00);  // DAC volume to 0
+    codec_wr(0x0E, 0xFF);  // power down system blocks
+    codec_wr(0x12, 0x02);
+    codec_wr(0x0D, 0xFA);
+    codec_wr(0x15, 0x00);
+    codec_wr(0x45, 0x01);
+
+    i2s_driver_uninstall(I2S_NUM_0);
+    vTaskDelay(pdMS_TO_TICKS(50));
+    return (_verdict == 1) ? Result::PASS : Result::FAIL;
+}
+
+FactoryTest::Result FactoryTest::_test_mic()
+{
+    _show_screen(10, "Mic (ES8311)", "Initializing...", Result::SKIP);
+    // 5s * 16kHz * 2ch * 2 bytes = 320 000 bytes
+    constexpr uint32_t REC_SEC    = 5;
+    constexpr uint32_t SR         = I2S_SAMPLE_RATE;      // 16000
+    constexpr uint32_t I2S_CH     = 2;                    // stereo
+    constexpr size_t   BUF_SIZE   = REC_SEC * SR * I2S_CH * 2;
+    constexpr size_t   CHUNK_SIZE = SR * I2S_CH * 2;      // 1 second of audio = 64000 bytes
+
+    uint8_t *rec_buf = (uint8_t *)heap_caps_malloc(BUF_SIZE, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (!rec_buf) {
+        _update_screen("PSRAM alloc failed\nNeed 320 KB PSRAM", Result::FAIL);
+        return _auto_or_verdict(false) ? Result::PASS : Result::FAIL;
+    }
+
+    // ── ES8311 register initialization ────────────────────────────────────────
+    // I2C helper lambdas
+    auto codec_wr = [](uint8_t reg, uint8_t val) {
+        Wire.beginTransmission(ES8311_I2C_ADDR);
+        Wire.write(reg);
+        Wire.write(val);
+        return Wire.endTransmission() == 0;
+    };
+    auto codec_rd = [](uint8_t reg) -> uint8_t {
+        Wire.beginTransmission(ES8311_I2C_ADDR);
+        Wire.write(reg);
+        Wire.endTransmission(false);
+        Wire.requestFrom(ES8311_I2C_ADDR, (uint8_t)1);
+        return Wire.available() ? Wire.read() : 0xFF;
+    };
+
+    // ── PA control via TCA9554 IO7 ────────────────────────────────────────────
+    auto tca_pa_ctrl = [](bool enable) {
+        Wire.beginTransmission(TCA9554_I2C_ADDR);
+        Wire.write(0x03); Wire.write(0x7D);   // IO1+IO7 as output
+        Wire.endTransmission();
+        Wire.beginTransmission(TCA9554_I2C_ADDR);
+        Wire.write(0x01);
+        Wire.write(enable ? (uint8_t)0x82 : (uint8_t)0x02);
+        Wire.endTransmission();
+        LOG_I("[MIC] PA_CTRL (TCA9554 IO7) = %s", enable ? "ON" : "OFF");
+    };
+
+    // Init sequence derived from esp_codec_dev es8311.c
+    // (es8311_open + es8311_config_sample + es8311_set_bits_per_sample +
+    //  es8311_config_fmt + es8311_start)
+    // Mode: slave (ESP32-S3 is I2S master), MCLK=4096000 Hz (256*16kHz), 16-bit stereo
+    codec_wr(0x44, 0x08);  // GPIO: enhance I2C noise immunity
+    codec_wr(0x44, 0x08);  // second write for reliability
+    codec_wr(0x01, 0x30);
+    codec_wr(0x02, 0x00);
+    codec_wr(0x03, 0x10);
+    codec_wr(0x16, 0x24);  // ADC_REG16: PGA 24 dB init
+    codec_wr(0x04, 0x10);
+    codec_wr(0x05, 0x00);
+    codec_wr(0x0B, 0x00);
+    codec_wr(0x0C, 0x00);
+    codec_wr(0x10, 0x1F);
+    codec_wr(0x11, 0x7F);
+    codec_wr(0x00, 0x80);  // RESET_REG00: normal op, slave mode (bit6=0)
+    codec_wr(0x01, 0x3F);  // CLK_MANAGER_REG01: use external MCLK, not inverted
+    codec_wr(0x06, codec_rd(0x06) & (uint8_t)~0x20u);  // SCLK not inverted
+    codec_wr(0x13, 0x10);
+    codec_wr(0x1B, 0x0A);  // ADC HPF s1
+    codec_wr(0x1C, 0x6A);  // ADC HPF s2
+    codec_wr(0x44, 0x58);  // GPIO_REG44: internal DAC reference signal
+    // Clock config for MCLK=4096000 @ 16 kHz
+    // coeff_div entry: {4096000,16000, pre_div=1, multi=1, adc_div=1, dac_div=1,
+    //                   fs_mode=0, lrck_h=0x00, lrck_l=0xFF, bclk_div=4, adc_osr=0x10, dac_osr=0x20}
+    codec_wr(0x02, 0x00);  // pre_div=1, pre_multi=x1
+    codec_wr(0x05, 0x00);  // adc_div=1, dac_div=1
+    codec_wr(0x03, 0x10);  // fs_mode=0, adc_osr=0x10
+    codec_wr(0x04, 0x20);  // dac_osr=0x20
+    codec_wr(0x07, 0x00);  // lrck_h=0
+    codec_wr(0x08, 0xFF);  // lrck_l=0xFF
+    codec_wr(0x06, 0x03);  // bclk_div: reg = bclk_div-1 = 3
+    // 16-bit Philips/I2S format
+    codec_wr(0x09, 0x0C);  // SDPIN:  16-bit (bits[3:2]=11), I2S (bits[1:0]=00), ADC on (bit6=0)
+    codec_wr(0x0A, 0x0C);  // SDPOUT: 16-bit, I2S, DAC on
+    // Enable ADC + DAC paths
+    codec_wr(0x17, 0xFF);  // ADC digital volume max (+32 dB)
+    codec_wr(0x0E, 0x02);
+    codec_wr(0x12, 0x00);  // enable DAC
+    codec_wr(0x14, 0x1F);  // analog mic, PGA max (+18 dB MIC boost)
+    codec_wr(0x0D, 0x01);  // power up
+    codec_wr(0x15, 0x40);
+    codec_wr(0x31, 0x00);  // DAC unmute
+    codec_wr(0x37, 0x08);  // DAC ramp rate
+    codec_wr(0x45, 0x00);
+    codec_wr(0x32, 0xFF);  // DAC volume max (+32 dB)
+    LOG_I("[AUDIO] ES8311 regs written. REG00=0x%02X REG01=0x%02X REG09=0x%02X",
+          codec_rd(0x00), codec_rd(0x01), codec_rd(0x09));
+
+    // ── I2S initialization (legacy driver/i2s.h, IDF 4.4) ──────────────────────────────
+    i2s_config_t i2s_cfg = {};
+    i2s_cfg.mode                 = (i2s_mode_t)(I2S_MODE_MASTER | I2S_MODE_TX | I2S_MODE_RX);
+    i2s_cfg.sample_rate          = I2S_SAMPLE_RATE;
+    i2s_cfg.bits_per_sample      = I2S_BITS_PER_SAMPLE_16BIT;
+    i2s_cfg.channel_format       = I2S_CHANNEL_FMT_RIGHT_LEFT;  // stereo
+    i2s_cfg.communication_format = I2S_COMM_FORMAT_STAND_I2S;   // Philips
+    i2s_cfg.intr_alloc_flags     = ESP_INTR_FLAG_LEVEL1;
+    i2s_cfg.dma_buf_count        = 8;
+    i2s_cfg.dma_buf_len          = 512;    // 512 frames * 2ch * 2 bytes = 2048 bytes/buf
+    i2s_cfg.use_apll             = false;
+    i2s_cfg.tx_desc_auto_clear   = true;
+    i2s_cfg.mclk_multiple        = I2S_MCLK_MULTIPLE_256;  // MCLK = 256*16000 = 4096000 Hz
+
+    i2s_pin_config_t pin_cfg = {};
+    pin_cfg.mck_io_num   = I2S_MCLK_PIN;
+    pin_cfg.bck_io_num   = I2S_BCLK_PIN;
+    pin_cfg.ws_io_num    = I2S_LRCK_PIN;
+    pin_cfg.data_out_num = I2S_DOUT_PIN;
+    pin_cfg.data_in_num  = I2S_DIN_PIN;
+
+    {
+        esp_err_t err = i2s_driver_install(I2S_NUM_0, &i2s_cfg, 0, NULL);
+        if (err != ESP_OK) {
+            heap_caps_free(rec_buf);
+            char emsg[64];
+            snprintf(emsg, sizeof(emsg), "I2S install failed\nerr=0x%04X", err);
+            _update_screen(emsg, Result::FAIL);
+            return _auto_or_verdict(false) ? Result::PASS : Result::FAIL;
+        }
+        err = i2s_set_pin(I2S_NUM_0, &pin_cfg);
+        if (err != ESP_OK) {
+            i2s_driver_uninstall(I2S_NUM_0);
+            heap_caps_free(rec_buf);
+            char emsg[64];
+            snprintf(emsg, sizeof(emsg), "I2S pin cfg failed\nerr=0x%04X", err);
+            _update_screen(emsg, Result::FAIL);
+            return _auto_or_verdict(false) ? Result::PASS : Result::FAIL;
+        }
+        LOG_I("[AUDIO] I2S ready: SR=%u CH=2 MCLK=256x BUF=%u bytes", SR, (unsigned)BUF_SIZE);
+    }
+
+    // ── Build interactive screen ───────────────────────────────────────────────
+    constexpr uint16_t TITLE_H = 40;
+    _verdict = -1;
+
+    // Flag shared between LVGL callback (sets it) and this task (reads it)
+    struct RecCtx { volatile bool clicked; };
+    RecCtx rec_ctx { false };
+
+    lv_obj_t *status_lbl = nullptr;
+    lv_obj_t *record_btn = nullptr;
+
+    if (LVGL_LOCK(500)) {
+        lv_obj_t *scr = lv_obj_create(nullptr);
+        lv_obj_set_style_bg_color(scr, lv_color_hex(COLOR_BG), 0);
+        lv_obj_set_style_bg_opa(scr, LV_OPA_COVER, 0);
+        lv_obj_clear_flag(scr, LV_OBJ_FLAG_SCROLLABLE);
+
+        // ── Status label (body area center) ──────────────────────────────────
+        status_lbl = lv_label_create(scr);
+        lv_obj_set_style_text_color(status_lbl, lv_color_hex(COLOR_TEXT), 0);
+        lv_obj_set_style_text_font(status_lbl, &lv_font_montserrat_16, 0);
+        lv_label_set_text(status_lbl, "Tap RECORD to begin");
+        lv_obj_align(status_lbl, LV_ALIGN_CENTER, 0, -30);
+
+        // ── RECORD button ────────────────────────────────────────────────────
+        record_btn = lv_btn_create(scr);
+        lv_obj_set_size(record_btn, 150, 46);
+        lv_obj_align(record_btn, LV_ALIGN_CENTER, 0, 28);
+        lv_obj_set_style_bg_color(record_btn, lv_color_hex(0xC0392B), 0);
+        lv_obj_set_style_radius(record_btn, 10, 0);
+        lv_obj_add_event_cb(record_btn, [](lv_event_t *e) {
+            if (lv_event_get_code(e) != LV_EVENT_CLICKED) return;
+            static_cast<RecCtx *>(lv_event_get_user_data(e))->clicked = true;
+        }, LV_EVENT_CLICKED, &rec_ctx);
+        lv_obj_t *rec_lbl = lv_label_create(record_btn);
+        lv_obj_set_style_text_color(rec_lbl, lv_color_hex(0xFFFFFF), 0);
+        lv_obj_set_style_text_font(rec_lbl, &lv_font_montserrat_16, 0);
+        lv_label_set_text(rec_lbl, "RECORD");
+        lv_obj_center(rec_lbl);
+
+        // ── Title bar (rendered last = highest z-order) ───────────────────────
+        lv_obj_t *tb = lv_obj_create(scr);
+        lv_obj_set_size(tb, SCREEN_WIDTH, TITLE_H);
+        lv_obj_set_pos(tb, 0, 0);
+        lv_obj_set_style_bg_color(tb, lv_color_hex(COLOR_TITLE_BG), 0);
+        lv_obj_set_style_bg_opa(tb, LV_OPA_COVER, 0);
+        lv_obj_set_style_border_width(tb, 0, 0);
+        lv_obj_set_style_radius(tb, 0, 0);
+        lv_obj_clear_flag(tb, LV_OBJ_FLAG_SCROLLABLE);
+
+        lv_obj_t *tb_fail = lv_btn_create(tb);
+        lv_obj_set_size(tb_fail, 105, 30);
+        lv_obj_align(tb_fail, LV_ALIGN_LEFT_MID, 2, 0);
+        lv_obj_set_style_bg_color(tb_fail, lv_color_hex(COLOR_FAIL), 0);
+        lv_obj_add_event_cb(tb_fail, _on_fail_btn, LV_EVENT_ALL, this);
+        lv_obj_t *tb_fl = lv_label_create(tb_fail);
+        lv_label_set_text(tb_fl, "FAIL");
+        lv_obj_center(tb_fl);
+
+        lv_obj_t *tb_pass = lv_btn_create(tb);
+        lv_obj_set_size(tb_pass, 193, 30);
+        lv_obj_align(tb_pass, LV_ALIGN_RIGHT_MID, -2, 0);
+        lv_obj_set_style_bg_color(tb_pass, lv_color_hex(COLOR_PASS), 0);
+        lv_obj_add_event_cb(tb_pass, _on_ok_btn, LV_EVENT_ALL, this);
+        lv_obj_t *tb_pl = lv_label_create(tb_pass);
+        lv_label_set_text(tb_pl, "PASS");
+        lv_obj_center(tb_pl);
+
+        lv_scr_load(scr);
+        LVGL_UNLOCK();
+    }
+
+    // ── Main interaction loop ─────────────────────────────────────────────────
+    auto set_status = [&](const char *text, uint32_t color) {
+        if (status_lbl && LVGL_LOCK(50)) {
+            lv_label_set_text(status_lbl, text);
+            lv_obj_set_style_text_color(status_lbl, lv_color_hex(color), 0);
+            LVGL_UNLOCK();
+        }
+    };
+    auto show_btn = [&](bool visible) {
+        if (record_btn && LVGL_LOCK(50)) {
+            if (visible) lv_obj_clear_flag(record_btn, LV_OBJ_FLAG_HIDDEN);
+            else         lv_obj_add_flag(record_btn,   LV_OBJ_FLAG_HIDDEN);
+            LVGL_UNLOCK();
+        }
+    };
+
+    while (_verdict < 0) {
+        if (!rec_ctx.clicked) {
+            vTaskDelay(pdMS_TO_TICKS(50));
+            continue;
+        }
+        rec_ctx.clicked = false;
+        show_btn(false);
+
+        // ── Recording phase ───────────────────────────────────────────────────
+        bool rec_ok = true;
+        size_t total_bytes = 0;
+        for (uint32_t sec = 0; sec < REC_SEC && _verdict < 0; sec++) {
+            char label_buf[32];
+            snprintf(label_buf, sizeof(label_buf), "Recording...  %lu s",
+                     (unsigned long)(REC_SEC - sec));
+            set_status(label_buf, 0xE74C3C);
+
+            size_t bytes_done = 0;
+            esp_err_t err = i2s_read(I2S_NUM_0,
+                                     rec_buf + total_bytes,
+                                     CHUNK_SIZE, &bytes_done,
+                                     pdMS_TO_TICKS(2000));
+            if (err != ESP_OK) {
+                LOG_E("[AUDIO] i2s_read err=0x%X", err);
+                char emsg[64];
+                snprintf(emsg, sizeof(emsg), "I2S RX error 0x%X\nCheck microphone", err);
+                set_status(emsg, 0xE74C3C);
+                rec_ok = false;
+                break;
+            }
+            total_bytes += bytes_done;
+            LOG_I("[AUDIO] REC sec %u/%u: %u bytes", sec + 1, REC_SEC, (unsigned)bytes_done);
+        }
+        if (_verdict >= 0) break;
+
+        // ── Playback phase ────────────────────────────────────────────────────
+        if (rec_ok) {
+            tca_pa_ctrl(true);
+            vTaskDelay(pdMS_TO_TICKS(50));   // PA settle
+            set_status("Replaying...", 0x2ECC71);
+            size_t bytes_written = 0;
+            esp_err_t err = i2s_write(I2S_NUM_0, rec_buf, total_bytes,
+                                      &bytes_written,
+                                      pdMS_TO_TICKS((REC_SEC + 2) * 1000));
+            if (err != ESP_OK) {
+                LOG_E("[AUDIO] i2s_write err=0x%X", err);
+                char emsg[64];
+                snprintf(emsg, sizeof(emsg), "I2S TX error 0x%X\nCheck speaker", err);
+                set_status(emsg, 0xE74C3C);
+            } else {
+                LOG_I("[AUDIO] Playback done: %u bytes", (unsigned)bytes_written);
+                set_status("Tap RECORD to begin", COLOR_TEXT);
+                show_btn(true);
+            }
+        } else {
+            set_status("Error — tap RECORD to retry", 0xE74C3C);
+            show_btn(true);
+        }
+    }
+
+    // ── Cleanup ───────────────────────────────────────────────────────────────
+    tca_pa_ctrl(false);   // disable PA
+    i2s_driver_uninstall(I2S_NUM_0);
+    heap_caps_free(rec_buf);
+    vTaskDelay(pdMS_TO_TICKS(50));
+    return (_verdict == 1) ? Result::PASS : Result::FAIL;
 }

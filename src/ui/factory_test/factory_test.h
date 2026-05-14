@@ -40,7 +40,8 @@ private:
     Result _test_pmu();       // AXP2101: I2C ack + valid voltage reading
     Result _test_rtc();       // PCF85063: I2C ack + second register increments
     Result _test_camera();    // Camera init + capture one non-black frame
-    Result _test_audio();     // ES8311: I2C ack + register write without NAK
+    Result _test_codec();     // ES8311: I2C probe + ID check + 1 kHz tone playback
+    Result _test_mic();       // ES8311: mic record 5s then replay via speaker
 
     // ── LVGL screen helpers ───────────────────────────────────────────────
 
