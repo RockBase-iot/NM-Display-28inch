@@ -4,6 +4,12 @@
 
 This project is a full-board hardware validation firmware for the **NM-Display 2.8-inch development board** (ESP32-S3), designed for factory testing and hardware bring-up verification.
 
+## About NM-Display-28inch
+
+**NM-Display-28inch** is a 2.8-inch smart display development board based on the ESP32-S3, jointly created by RockBase-iot and the NMTech Team. Built upon the proven hardware foundation of the Waveshare ESP32-S3-Touch-LCD-2.8B, it introduces deep feature expansion and optimization, delivering a higher-integration development platform for smart home, IoT HMI, voice interaction terminals, and beyond.
+
+![NM-Display-28inch](image/nm-display-28inch.png)
+
 ---
 
 ## Table of Contents
@@ -23,7 +29,7 @@ This project is a full-board hardware validation firmware for the **NM-Display 2
 
 | Item        | Specification                          |
 | ----------- | -------------------------------------- |
-| MCU         | ESP32-S3                               |
+| MCU         | ESP32-S3 Dual-core Xtensa LX7, 240MHz  |
 | Display     | 2.8" ST7789, 320×240                   |
 | Touch       | FT6336 (I2C capacitive touch)          |
 | PMU         | AXP2101 (power management)             |
@@ -41,6 +47,8 @@ This project is a full-board hardware validation firmware for the **NM-Display 2
 ## Pin Diagram
 
 ![NM-Display-2.8 Pin Diagram](image/nm-display-28.png)
+
+![Pinout](image/NM-Display-28inch-pinout.png)
 
 ---
 

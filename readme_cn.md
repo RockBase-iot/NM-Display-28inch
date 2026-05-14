@@ -3,6 +3,11 @@
 # NM-Display-2.8inch 全功能验证固件
 
 本项目是针对 **NM-Display 2.8 寸开发板**（ESP32-S3）的全板硬件功能覆盖测试固件，用于出厂验证和功能联调。
+## 关于NM-Display-28inch介绍
+
+**NM-Display-28inch** 是 RockBase-iot 与 NMTech 团队联合打造的一款基于 ESP32-S3 的 2.8 英寸智能显示开发板。它在 Waveshare ESP32-S3-Touch-LCD-2.8B 成熟硬件方案的基础上，进行了深度功能拓展与优化，为智能家居、物联网 HMI、语音交互终端等场景提供了更高集成度的开发平台。
+
+![](image/nm-display-28inch.png)
 
 ---
 
