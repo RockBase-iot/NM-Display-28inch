@@ -4,4 +4,6 @@
 .vscode/launch.json
 .vscode/ipch
 .venv/
+*.bin
+build_log.txt
 migration-idf-to-arduino.md
