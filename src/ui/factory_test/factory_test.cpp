@@ -1413,8 +1413,11 @@ FactoryTest::Result FactoryTest::_test_imu()
         if (LVGL_LOCK(0)) {   // non-blocking: skip render frame if LVGL is busy
             if (show_3d && canvas3d) {
                 // ── AHRS mode ──────────────────────────────────────────────
-                // Physical calibration: IMU pitch/roll axes are swapped
-                Euler e3 = ahrs.euler();
+                // Display calibration: treat +90 deg pitch as the level plane.
+                constexpr float C45 = 0.70710678f;
+                Quat q_disp = ahrs.quaternion() * Quat{C45, 0.0f, -C45, 0.0f};
+                q_disp.normalize();
+                Euler e3 = quat_to_euler(q_disp);
                 _draw_ahrs_frame(canvas3d, e3.roll, e3.pitch, e3.yaw);
             } else if (!show_3d && tbl_lbl) {
                 // ── RAW table mode ─────────────────────────────────────────
