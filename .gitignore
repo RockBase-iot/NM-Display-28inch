@@ -7,3 +7,4 @@
 *.bin
 build_log.txt
 migration-idf-to-arduino.md
+hourglass_design.md
