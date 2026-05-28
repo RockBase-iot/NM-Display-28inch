@@ -57,11 +57,6 @@ bool NMDisplay28App::init() {
               SPIFFS.totalBytes(), SPIFFS.usedBytes());
     }
 
-    // TODO Phase 3: axp2101 / qmi8658 / pcf85063 port init
-    // TODO Phase 4: sdcard / wifi / button port init
-    // TODO Phase 5: camera_port_init()
-    // TODO Phase 7: es8311_port_init()
-
     return true;
 }
 

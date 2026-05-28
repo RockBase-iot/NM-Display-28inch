@@ -404,11 +404,11 @@ void FactoryTest::_run_all()
 
     constexpr TestCase cases[] = {
         { "Display",  &FactoryTest::_test_display  },
+        { "PMU",      &FactoryTest::_test_pmu      },
         { "Touch",    &FactoryTest::_test_touch    },
         { "SD Card",  &FactoryTest::_test_sdcard   },
         { "WiFi",     &FactoryTest::_test_wifi     },
         { "IMU",      &FactoryTest::_test_imu      },
-        { "PMU",      &FactoryTest::_test_pmu      },
         { "RTC",      &FactoryTest::_test_rtc      },
         { "Camera",   &FactoryTest::_test_camera   },
         { "Codec",    &FactoryTest::_test_codec    },
@@ -453,7 +453,7 @@ void FactoryTest::_show_screen(uint8_t index, const char *name,
     lv_obj_clear_flag(title_bar, LV_OBJ_FLAG_SCROLLABLE);
 
     char title_buf[48];
-    snprintf(title_buf, sizeof(title_buf), "Test %d/9: %s", index, name);
+    snprintf(title_buf, sizeof(title_buf), "Test %d/10: %s", index, name);
     lv_obj_t *title_lbl = lv_label_create(title_bar);
     lv_label_set_text(title_lbl, title_buf);
     lv_obj_set_style_text_color(title_lbl, lv_color_hex(COLOR_TEXT), 0);
@@ -775,7 +775,7 @@ FactoryTest::Result FactoryTest::_test_touch()
     lv_obj_clear_flag(title_bar, LV_OBJ_FLAG_SCROLLABLE);
 
     lv_obj_t *title_lbl = lv_label_create(title_bar);
-    lv_label_set_text(title_lbl, "Test 2/9: Touch");
+    lv_label_set_text(title_lbl, "Test 3/10: Touch");
     lv_obj_set_style_text_color(title_lbl, lv_color_hex(COLOR_TEXT), 0);
     lv_obj_set_style_text_font(title_lbl, &lv_font_montserrat_16, 0);
     lv_obj_center(title_lbl);
@@ -910,7 +910,7 @@ FactoryTest::Result FactoryTest::_test_touch()
 
 FactoryTest::Result FactoryTest::_test_sdcard()
 {
-    _show_screen(3, "SD Card", "Mounting...", Result::SKIP);
+    _show_screen(4, "SD Card", "Mounting...", Result::SKIP);
 
     SD_MMC.setPins(SD_CLK_PIN, SD_CMD_PIN, SD_D0_PIN);
     if (!SD_MMC.begin("/sdcard", true)) {   // true = 1-bit mode
@@ -1022,7 +1022,7 @@ FactoryTest::Result FactoryTest::_test_sdcard()
 
 FactoryTest::Result FactoryTest::_test_wifi()
 {
-    _show_screen(4, "WiFi", "Scanning...", Result::SKIP);
+    _show_screen(5, "WiFi", "Scanning...", Result::SKIP);
 
     // Body label already uses Inconsolata_16 + recolor from _show_screen().
     // UNSCII_16 font switch removed — Inconsolata_16 is already set.
@@ -1078,7 +1078,7 @@ FactoryTest::Result FactoryTest::_test_imu()
 {
     // QMI8658 default address: 0x6B (SA0 tied high) or 0x6A.
     constexpr uint8_t QMI8658_ADDR = 0x6B;
-    _show_screen(5, "IMU (QMI8658)", "Probing I2C...", Result::SKIP);
+    _show_screen(6, "IMU (QMI8658)", "Probing I2C...", Result::SKIP);
 
     // Helper: show error text in red, centered in the test body area.
     auto show_error = [&](const char *text) {
@@ -1460,7 +1460,7 @@ FactoryTest::Result FactoryTest::_test_imu()
 
 FactoryTest::Result FactoryTest::_test_pmu()
 {
-    _show_screen(6, "PMU (AXP2101)", "Probing I2C...", Result::SKIP);
+    _show_screen(2, "PMU (AXP2101)", "Probing I2C...", Result::SKIP);
 
     // AXP2101 I2C address: 0x34 (ADDR=GND default) or 0x35 (ADDR=VCC alt)
     constexpr uint8_t AXP2101_ADDR_A = 0x34;
@@ -1488,6 +1488,48 @@ FactoryTest::Result FactoryTest::_test_pmu()
         Wire.write(val);
         Wire.endTransmission();
     };
+
+    // ── Full AXP2101 initialization (esp-claw nm_display_28inch sequence) ──
+    // Runs once here in the PMU test; rails stay on for all subsequent tests
+    // (camera, codec, etc.) — do NOT call axp2101_init() elsewhere.
+    {
+        auto rmw_reg = [&](uint8_t reg, uint8_t mask, uint8_t value) {
+            uint8_t cur = read_reg(reg);
+            cur = (cur & ~mask) | (value & mask);
+            write_reg(reg, cur);
+        };
+        // Step 0: raise VBUS current limit before enabling any rail.
+        // Default 500 mA is too low for WiFi + camera + display + audio;
+        // VSYS droops below UVLO and resets the board. 1500 mA removes this.
+        rmw_reg(0x16, 0x07, 0x04);   // VBUS 1500 mA
+        // Power-path / charger tuning
+        rmw_reg(0x14, 0x70, 0x00);   // VSYS_MIN 4.1 V
+        rmw_reg(0x28, 0xFF, 0xFF);   // disable fast power-on DC4/3/2/1
+        rmw_reg(0x29, 0xFF, 0xFF);   // disable fast power-on ALDO3/2/1/DC5
+        rmw_reg(0x63, 0x0F, 0x08);   // ITERM 200 mA
+        rmw_reg(0x23, 0xFF, 0x00);   // DC-DC OVP/UVP triggered shutdown off
+        rmw_reg(0x15, 0x0F, 0x00);   // VINDPM 3.88 V
+        // Rail voltages
+        rmw_reg(0x96, 0x1F, 0x0A);   // BLDO1  1500 mV
+        rmw_reg(0x83, 0x7F, 0x32);   // DC2    1000 mV
+        rmw_reg(0x84, 0x7F, 0x69);   // DC3    3300 mV
+        rmw_reg(0x85, 0x7F, 0x32);   // DC4    1000 mV
+        rmw_reg(0x86, 0x1F, 0x13);   // DC5    3300 mV
+        rmw_reg(0x92, 0x1F, 0x1C);   // ALDO1  3300 mV
+        rmw_reg(0x93, 0x1F, 0x1C);   // ALDO2  3300 mV
+        rmw_reg(0x94, 0x1F, 0x1C);   // ALDO3  3300 mV
+        rmw_reg(0x95, 0x1F, 0x1C);   // ALDO4  3300 mV
+        rmw_reg(0x97, 0x1F, 0x17);   // BLDO2  2800 mV
+        rmw_reg(0x98, 0x1F, 0x0A);   // CPUSLDO 1000 mV
+        rmw_reg(0x99, 0x1F, 0x1C);   // DLDO1  3300 mV
+        rmw_reg(0x9A, 0x1F, 0x1C);   // DLDO2  3300 mV
+        // Enable output rails
+        rmw_reg(0x80, 0x1E, 0x1E);   // DC2/DC3/DC4/DC5 enable
+        rmw_reg(0x90, 0xFF, 0xFF);   // ALDO1/2/3/4 + BLDO1/2 + CPUSLDO + DLDO1
+        rmw_reg(0x91, 0x01, 0x01);   // DLDO2 enable
+        vTaskDelay(pdMS_TO_TICKS(20));  // let rails stabilise
+    }
+    _update_screen("PMU rails enabled\nReading status...", Result::SKIP);
 
     // ── One-time static reads ──────────────────────────────────────────────
     // Chip ID — reg 0x03 (IC_TYPE)
@@ -1650,75 +1692,6 @@ FactoryTest::Result FactoryTest::_test_camera()
         lv_obj_align(lbl, LV_ALIGN_CENTER, 0, 0);
         LVGL_UNLOCK();
     };
-
-    // ── AXP2101 LDO enable for camera power ──────────────────────────────────
-    // The camera sensor requires several power rails from the AXP2101 PMU.
-    // application.cpp has not yet configured the PMU, so the rails may be off
-    // by default, causing esp_camera_fb_get() to always return NULL even though
-    // sensor I2C communication (PID read) succeeds at lower current.
-    //
-    // AXP2101 register map (relevant to camera):
-    //   0x93  ALDO1 voltage   (OV5640 AVDD  → 2.8 V  → 0x17  [500+23×100 mV])
-    //   0x94  ALDO2 voltage   (OV5640 DOVDD → 2.8 V  → 0x17)
-    //   0x95  ALDO3 voltage   (OV5640 AVDD  → 2.8 V  → 0x17, board-variant)
-    //   0x97  BLDO1 voltage   (OV5640 DVDD  → 1.5 V  → 0x0A  [500+10×100 mV])
-    //   0x90  ALDO1/2/3/4 enable bitfield  bit3=ALDO4 bit2=ALDO3 bit1=ALDO2 bit0=ALDO1
-    //   0x91  BLDO1/BLDO2 enable
-    //   0x92  DLDO1/DLDO2 enable
-    //
-    // Enable all LDO rails needed by the camera and other board peripherals.
-    {
-        constexpr uint8_t PMU = 0x34;   // AXP2101 default I2C address
-
-        // Helper: read-modify-write one AXP2101 register
-        auto pmu_rmw = [&](uint8_t reg, uint8_t set_bits, uint8_t clear_bits) {
-            Wire.beginTransmission(PMU);
-            Wire.write(reg);
-            Wire.endTransmission(false);
-            Wire.requestFrom(PMU, (uint8_t)1);
-            uint8_t v = Wire.available() ? Wire.read() : 0x00;
-            v = (v & ~clear_bits) | set_bits;
-            Wire.beginTransmission(PMU);
-            Wire.write(reg); Wire.write(v);
-            Wire.endTransmission();
-        };
-
-        // Set output voltages
-        // ALDO1 = 3300 mV : step = (3300-500)/100 = 28 = 0x1C
-        // ALDO2 = 3300 mV : 0x1C
-        // ALDO3 = 3300 mV : 0x1C
-        // ALDO4 = 3300 mV : 0x1C
-        // BLDO1 = 1500 mV : step = (1500-500)/100 = 10 = 0x0A
-        // BLDO2 = 2800 mV : step = (2800-500)/100 = 23 = 0x17
-        // DLDO1 = 3300 mV : 0x1C
-        // DLDO2 = 3300 mV : step = (3300-500)/50 = 56 = 0x38 (DLDO2 is 50mV/step)
-        Wire.beginTransmission(PMU); Wire.write(0x93); Wire.write(0x1C); Wire.endTransmission(); // ALDO1
-        Wire.beginTransmission(PMU); Wire.write(0x94); Wire.write(0x1C); Wire.endTransmission(); // ALDO2
-        Wire.beginTransmission(PMU); Wire.write(0x95); Wire.write(0x1C); Wire.endTransmission(); // ALDO3
-        Wire.beginTransmission(PMU); Wire.write(0x96); Wire.write(0x1C); Wire.endTransmission(); // ALDO4
-        Wire.beginTransmission(PMU); Wire.write(0x97); Wire.write(0x0A); Wire.endTransmission(); // BLDO1
-        Wire.beginTransmission(PMU); Wire.write(0x98); Wire.write(0x17); Wire.endTransmission(); // BLDO2
-        Wire.beginTransmission(PMU); Wire.write(0x99); Wire.write(0x1C); Wire.endTransmission(); // DLDO1
-        Wire.beginTransmission(PMU); Wire.write(0x9A); Wire.write(0x38); Wire.endTransmission(); // DLDO2
-
-        // Enable ALDO1/2/3/4 (reg 0x90 bits [3:0])
-        pmu_rmw(0x90, 0x0F, 0x00);
-        // Enable BLDO1/2 (reg 0x91 bits [1:0])
-        pmu_rmw(0x91, 0x03, 0x00);
-        // Enable DLDO1/2 (reg 0x92 bits [1:0])
-        pmu_rmw(0x92, 0x03, 0x00);
-
-        vTaskDelay(pdMS_TO_TICKS(20));   // let rails stabilise
-
-        // Read back enable registers so we can log them
-        auto pmu_read = [&](uint8_t reg) -> uint8_t {
-            Wire.beginTransmission(PMU); Wire.write(reg); Wire.endTransmission(false);
-            Wire.requestFrom(PMU, (uint8_t)1);
-            return Wire.available() ? Wire.read() : 0xFF;
-        };
-        LOG_I("[CAM] AXP2101 enable regs: 0x90=0x%02x 0x91=0x%02x 0x92=0x%02x",
-              pmu_read(0x90), pmu_read(0x91), pmu_read(0x92));
-    }
 
     // ── Camera configuration ──────────────────────────────────────────────────
     // LEDC CH0 / TIMER0 are reserved for camera XCLK (see config.h).
