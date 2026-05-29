@@ -26,6 +26,102 @@
 #define COLOR_TEXT      0xECF0F1
 #define COLOR_SUBTEXT   0xBDC3C7
 
+// AXP2101 register map and field values used by _test_pmu().
+#define AXP2101_I2C_ADDR_ALT          0x35
+
+#define AXP2101_REG_STATUS1           0x00
+#define AXP2101_REG_STATUS2           0x01
+#define AXP2101_REG_IC_TYPE           0x03
+#define AXP2101_REG_VSYS_MIN          0x14
+#define AXP2101_REG_VINDPM            0x15
+#define AXP2101_REG_VBUSLIM           0x16
+#define AXP2101_REG_CHG_GAUGE_WDT     0x18
+#define AXP2101_REG_DCDC_OVP_UVP      0x23
+#define AXP2101_REG_FAST_PWRON0       0x28
+#define AXP2101_REG_FAST_PWRON1       0x29
+#define AXP2101_REG_ADC_CHANNEL_CTRL  0x30
+#define AXP2101_REG_VBAT_H            0x34
+#define AXP2101_REG_VBAT_L            0x35
+#define AXP2101_REG_VSYS_H            0x36
+#define AXP2101_REG_VSYS_L            0x37
+#define AXP2101_REG_VBUS_H            0x38
+#define AXP2101_REG_VBUS_L            0x39
+#define AXP2101_REG_DIE_TEMP_H        0x3C
+#define AXP2101_REG_DIE_TEMP_L        0x3D
+#define AXP2101_REG_ITERM_CHG         0x63
+#define AXP2101_REG_DCDC_EN           0x80
+#define AXP2101_REG_DC1_VOL           0x82
+#define AXP2101_REG_DC2_VOL           0x83
+#define AXP2101_REG_DC3_VOL           0x84
+#define AXP2101_REG_DC4_VOL           0x85
+#define AXP2101_REG_DC5_VOL           0x86
+#define AXP2101_REG_LDO_EN            0x90
+#define AXP2101_REG_DLDO2_EN          0x91
+#define AXP2101_REG_ALDO1_VOL         0x92
+#define AXP2101_REG_ALDO2_VOL         0x93
+#define AXP2101_REG_ALDO3_VOL         0x94
+#define AXP2101_REG_ALDO4_VOL         0x95
+#define AXP2101_REG_BLDO1_VOL         0x96
+#define AXP2101_REG_BLDO2_VOL         0x97
+#define AXP2101_REG_CPUSLDO_VOL       0x98
+#define AXP2101_REG_DLDO1_VOL         0x99
+#define AXP2101_REG_DLDO2_VOL         0x9A
+#define AXP2101_REG_BAT_PERCENT       0xA4
+
+#define AXP2101_CHIP_ID               0x4A
+#define AXP2101B_CHIP_ID              0x47
+
+#define AXP2101_MASK_VBUSLIM          0x07
+#define AXP2101_MASK_VSYS_MIN         0x70
+#define AXP2101_MASK_FAST_PWRON       0xFF
+#define AXP2101_MASK_ITERM_CHG        0x0F
+#define AXP2101_MASK_DCDC_OVP_UVP     0xFF
+#define AXP2101_MASK_VINDPM           0x0F
+#define AXP2101_MASK_DCDC_VOL         0x7F
+#define AXP2101_MASK_DCDC5_VOL        0x1F
+#define AXP2101_MASK_LDO_VOL          0x1F
+#define AXP2101_MASK_DCDC_EN_DC2_DC5  0x1E
+#define AXP2101_MASK_LDO_EN_ALL       0xFF
+#define AXP2101_MASK_DLDO2_EN         0x01
+#define AXP2101_MASK_DC1_VOL          0x1F
+#define AXP2101_MASK_ADC_H5           0x1F
+#define AXP2101_MASK_ADC_H6           0x3F
+#define AXP2101_MASK_CHG_STATE        0x07
+
+#define AXP2101_VBUS_1500MA           0x04
+#define AXP2101_VSYS_MIN_4V1          0x00
+#define AXP2101_FAST_PWRON_ALL_DIS    0xFF
+#define AXP2101_ITERM_200MA           0x08
+#define AXP2101_DCDC_OVP_UVP_OFF      0x00
+#define AXP2101_VINDPM_3V88           0x00
+#define AXP2101_BLDO1_1500MV          0x0A
+#define AXP2101_DC2_1000MV            0x32
+#define AXP2101_DC3_3300MV            0x69
+#define AXP2101_DC4_1000MV            0x32
+#define AXP2101_DC5_3300MV            0x13
+#define AXP2101_LDO_3300MV            0x1C
+#define AXP2101_BLDO2_2800MV          0x17
+#define AXP2101_CPUSLDO_1000MV        0x0A
+#define AXP2101_DCDC_DC2_DC5_ENABLE   0x1E
+#define AXP2101_LDO_ALL_ENABLE        0xFF
+#define AXP2101_DLDO2_ENABLE          0x01
+#define AXP2101_ADC_ALL_ENABLE        0xFF
+#define AXP2101_FUEL_GAUGE_ENABLE_BIT 0x04
+
+#define AXP2101_STATUS1_VBUS_GOOD_BIT 5
+#define AXP2101_CHG_STATE_TRICKLE     1
+#define AXP2101_CHG_STATE_DONE        5
+
+#define AXP2101_DC1_BASE_MV           1500u
+#define AXP2101_DC1_STEP_MV           100u
+#define AXP2101_LDO_BASE_MV           500u
+#define AXP2101_LDO_STEP_MV           100u
+#define AXP2101_DIE_TEMP_OFFSET_C     22.0f
+#define AXP2101_DIE_TEMP_RAW_OFFSET   7274.0f
+#define AXP2101_DIE_TEMP_RAW_PER_C    20.0f
+#define AXP2101_DIE_TEMP_MIN_C        -10.0f
+#define AXP2101_DIE_TEMP_MAX_C        125.0f
+
 // ─── Verdict button callbacks ─────────────────────────────────────────────────
 
 void FactoryTest::_on_ok_btn(lv_event_t *e)
@@ -1463,11 +1559,9 @@ FactoryTest::Result FactoryTest::_test_pmu()
     _show_screen(2, "PMU (AXP2101)", "Probing I2C...", Result::SKIP);
 
     // AXP2101 I2C address: 0x34 (ADDR=GND default) or 0x35 (ADDR=VCC alt)
-    constexpr uint8_t AXP2101_ADDR_A = 0x34;
-    constexpr uint8_t AXP2101_ADDR_B = 0x35;
     uint8_t found_addr = 0;
-    if      (i2c_probe(AXP2101_ADDR_A)) found_addr = AXP2101_ADDR_A;
-    else if (i2c_probe(AXP2101_ADDR_B)) found_addr = AXP2101_ADDR_B;
+    if      (i2c_probe(AXP2101_I2C_ADDR))     found_addr = AXP2101_I2C_ADDR;
+    else if (i2c_probe(AXP2101_I2C_ADDR_ALT)) found_addr = AXP2101_I2C_ADDR_ALT;
 
     if (!found_addr) {
         _update_screen("I2C 0x34/35  #E74C3C FAIL #\nNo ACK on either addr", Result::FAIL);
@@ -1501,32 +1595,32 @@ FactoryTest::Result FactoryTest::_test_pmu()
         // Step 0: raise VBUS current limit before enabling any rail.
         // Default 500 mA is too low for WiFi + camera + display + audio;
         // VSYS droops below UVLO and resets the board. 1500 mA removes this.
-        rmw_reg(0x16, 0x07, 0x04);   // VBUS 1500 mA
+        rmw_reg(AXP2101_REG_VBUSLIM, AXP2101_MASK_VBUSLIM, AXP2101_VBUS_1500MA);
         // Power-path / charger tuning
-        rmw_reg(0x14, 0x70, 0x00);   // VSYS_MIN 4.1 V
-        rmw_reg(0x28, 0xFF, 0xFF);   // disable fast power-on DC4/3/2/1
-        rmw_reg(0x29, 0xFF, 0xFF);   // disable fast power-on ALDO3/2/1/DC5
-        rmw_reg(0x63, 0x0F, 0x08);   // ITERM 200 mA
-        rmw_reg(0x23, 0xFF, 0x00);   // DC-DC OVP/UVP triggered shutdown off
-        rmw_reg(0x15, 0x0F, 0x00);   // VINDPM 3.88 V
+        rmw_reg(AXP2101_REG_VSYS_MIN,     AXP2101_MASK_VSYS_MIN,     AXP2101_VSYS_MIN_4V1);
+        rmw_reg(AXP2101_REG_FAST_PWRON0,  AXP2101_MASK_FAST_PWRON,   AXP2101_FAST_PWRON_ALL_DIS);
+        rmw_reg(AXP2101_REG_FAST_PWRON1,  AXP2101_MASK_FAST_PWRON,   AXP2101_FAST_PWRON_ALL_DIS);
+        rmw_reg(AXP2101_REG_ITERM_CHG,    AXP2101_MASK_ITERM_CHG,    AXP2101_ITERM_200MA);
+        rmw_reg(AXP2101_REG_DCDC_OVP_UVP, AXP2101_MASK_DCDC_OVP_UVP, AXP2101_DCDC_OVP_UVP_OFF);
+        rmw_reg(AXP2101_REG_VINDPM,       AXP2101_MASK_VINDPM,       AXP2101_VINDPM_3V88);
         // Rail voltages
-        rmw_reg(0x96, 0x1F, 0x0A);   // BLDO1  1500 mV
-        rmw_reg(0x83, 0x7F, 0x32);   // DC2    1000 mV
-        rmw_reg(0x84, 0x7F, 0x69);   // DC3    3300 mV
-        rmw_reg(0x85, 0x7F, 0x32);   // DC4    1000 mV
-        rmw_reg(0x86, 0x1F, 0x13);   // DC5    3300 mV
-        rmw_reg(0x92, 0x1F, 0x1C);   // ALDO1  3300 mV
-        rmw_reg(0x93, 0x1F, 0x1C);   // ALDO2  3300 mV
-        rmw_reg(0x94, 0x1F, 0x1C);   // ALDO3  3300 mV
-        rmw_reg(0x95, 0x1F, 0x1C);   // ALDO4  3300 mV
-        rmw_reg(0x97, 0x1F, 0x17);   // BLDO2  2800 mV
-        rmw_reg(0x98, 0x1F, 0x0A);   // CPUSLDO 1000 mV
-        rmw_reg(0x99, 0x1F, 0x1C);   // DLDO1  3300 mV
-        rmw_reg(0x9A, 0x1F, 0x1C);   // DLDO2  3300 mV
+        rmw_reg(AXP2101_REG_BLDO1_VOL,   AXP2101_MASK_LDO_VOL,   AXP2101_BLDO1_1500MV);
+        rmw_reg(AXP2101_REG_DC2_VOL,     AXP2101_MASK_DCDC_VOL,  AXP2101_DC2_1000MV);
+        rmw_reg(AXP2101_REG_DC3_VOL,     AXP2101_MASK_DCDC_VOL,  AXP2101_DC3_3300MV);
+        rmw_reg(AXP2101_REG_DC4_VOL,     AXP2101_MASK_DCDC_VOL,  AXP2101_DC4_1000MV);
+        rmw_reg(AXP2101_REG_DC5_VOL,     AXP2101_MASK_DCDC5_VOL, AXP2101_DC5_3300MV);
+        rmw_reg(AXP2101_REG_ALDO1_VOL,   AXP2101_MASK_LDO_VOL,   AXP2101_LDO_3300MV);
+        rmw_reg(AXP2101_REG_ALDO2_VOL,   AXP2101_MASK_LDO_VOL,   AXP2101_LDO_3300MV);
+        rmw_reg(AXP2101_REG_ALDO3_VOL,   AXP2101_MASK_LDO_VOL,   AXP2101_LDO_3300MV);
+        rmw_reg(AXP2101_REG_ALDO4_VOL,   AXP2101_MASK_LDO_VOL,   AXP2101_LDO_3300MV);
+        rmw_reg(AXP2101_REG_BLDO2_VOL,   AXP2101_MASK_LDO_VOL,   AXP2101_BLDO2_2800MV);
+        rmw_reg(AXP2101_REG_CPUSLDO_VOL, AXP2101_MASK_LDO_VOL,   AXP2101_CPUSLDO_1000MV);
+        rmw_reg(AXP2101_REG_DLDO1_VOL,   AXP2101_MASK_LDO_VOL,   AXP2101_LDO_3300MV);
+        rmw_reg(AXP2101_REG_DLDO2_VOL,   AXP2101_MASK_LDO_VOL,   AXP2101_LDO_3300MV);
         // Enable output rails
-        rmw_reg(0x80, 0x1E, 0x1E);   // DC2/DC3/DC4/DC5 enable
-        rmw_reg(0x90, 0xFF, 0xFF);   // ALDO1/2/3/4 + BLDO1/2 + CPUSLDO + DLDO1
-        rmw_reg(0x91, 0x01, 0x01);   // DLDO2 enable
+        rmw_reg(AXP2101_REG_DCDC_EN,  AXP2101_MASK_DCDC_EN_DC2_DC5, AXP2101_DCDC_DC2_DC5_ENABLE);
+        rmw_reg(AXP2101_REG_LDO_EN,   AXP2101_MASK_LDO_EN_ALL,      AXP2101_LDO_ALL_ENABLE);
+        rmw_reg(AXP2101_REG_DLDO2_EN, AXP2101_MASK_DLDO2_EN,        AXP2101_DLDO2_ENABLE);
         vTaskDelay(pdMS_TO_TICKS(20));  // let rails stabilise
     }
     _update_screen("PMU rails enabled\nReading status...", Result::SKIP);
@@ -1534,30 +1628,30 @@ FactoryTest::Result FactoryTest::_test_pmu()
     // ── One-time static reads ──────────────────────────────────────────────
     // Chip ID — reg 0x03 (IC_TYPE)
     // AXP2101 standard: 0x4A;  AXP2101B/alt variant: 0x47
-    uint8_t chip_id = read_reg(0x03);
-    bool id_ok = (chip_id == 0x4A || chip_id == 0x47);
+    uint8_t chip_id = read_reg(AXP2101_REG_IC_TYPE);
+    bool id_ok = (chip_id == AXP2101_CHIP_ID || chip_id == AXP2101B_CHIP_ID);
 
     // Enable all ADC channels (reg 0x30 = ADC_CHANNEL_CTRL, write 0xFF)
-    write_reg(0x30, 0xFF);
+    write_reg(AXP2101_REG_ADC_CHANNEL_CTRL, AXP2101_ADC_ALL_ENABLE);
     // Also ensure fuel-gauge (coulomb counter) is active: reg 0x18 bit 2
-    uint8_t fg_ctrl = read_reg(0x18);
-    write_reg(0x18, fg_ctrl | 0x04);
+    uint8_t fg_ctrl = read_reg(AXP2101_REG_CHG_GAUGE_WDT);
+    write_reg(AXP2101_REG_CHG_GAUGE_WDT, fg_ctrl | AXP2101_FUEL_GAUGE_ENABLE_BIT);
     vTaskDelay(pdMS_TO_TICKS(100));   // let ADC complete first conversion
 
     // ── Static: LDO/DCDC config voltage registers (read once, don't change) ─
     // DCDC1: reg 0x82, bits[4:0], step 100mV from 1500mV
-    uint16_t dc1_mv   = (uint16_t)((read_reg(0x82) & 0x1F) * 100u + 1500u);
+    uint16_t dc1_mv   = (uint16_t)((read_reg(AXP2101_REG_DC1_VOL) & AXP2101_MASK_DC1_VOL) * AXP2101_DC1_STEP_MV + AXP2101_DC1_BASE_MV);
     // ALDO1-4: regs 0x92-0x95, bits[4:0], step 100mV from 500mV
     auto ldo_mv = [&](uint8_t reg) -> uint16_t {
-        return (uint16_t)((read_reg(reg) & 0x1F) * 100u + 500u);
+        return (uint16_t)((read_reg(reg) & AXP2101_MASK_LDO_VOL) * AXP2101_LDO_STEP_MV + AXP2101_LDO_BASE_MV);
     };
-    uint16_t aldo1_mv = ldo_mv(0x92);
-    uint16_t aldo2_mv = ldo_mv(0x93);
-    uint16_t aldo3_mv = ldo_mv(0x94);
-    uint16_t aldo4_mv = ldo_mv(0x95);
+    uint16_t aldo1_mv = ldo_mv(AXP2101_REG_ALDO1_VOL);
+    uint16_t aldo2_mv = ldo_mv(AXP2101_REG_ALDO2_VOL);
+    uint16_t aldo3_mv = ldo_mv(AXP2101_REG_ALDO3_VOL);
+    uint16_t aldo4_mv = ldo_mv(AXP2101_REG_ALDO4_VOL);
     // BLDO1-2: regs 0x96-0x97, same formula
-    uint16_t bldo1_mv = ldo_mv(0x96);
-    uint16_t bldo2_mv = ldo_mv(0x97);
+    uint16_t bldo1_mv = ldo_mv(AXP2101_REG_BLDO1_VOL);
+    uint16_t bldo2_mv = ldo_mv(AXP2101_REG_BLDO2_VOL);
 
     // ── Add verdict buttons (non-blocking) ────────────────────────────────
     _add_verdict_buttons(id_ok);
@@ -1565,26 +1659,26 @@ FactoryTest::Result FactoryTest::_test_pmu()
     // ── 100 ms real-time refresh loop ─────────────────────────────────────
     while (_verdict < 0) {
         // STATUS1 (0x00): bit5=VBUS_GOOD
-        uint8_t s1       = read_reg(0x00);
+        uint8_t s1       = read_reg(AXP2101_REG_STATUS1);
         // STATUS2 (0x01): bit[2:0]=charge state
-        uint8_t s2       = read_reg(0x01);
-        bool vbus_good   = (s1 & (1u << 5)) != 0;
-        uint8_t chg_stat = s2 & 0x07;
+        uint8_t s2       = read_reg(AXP2101_REG_STATUS2);
+        bool vbus_good   = (s1 & (1u << AXP2101_STATUS1_VBUS_GOOD_BIT)) != 0;
+        uint8_t chg_stat = s2 & AXP2101_MASK_CHG_STATE;
         // Charging when state is 1(Trickle)..5(Done)
-        bool is_charging = (chg_stat >= 1 && chg_stat <= 5);
+        bool is_charging = (chg_stat >= AXP2101_CHG_STATE_TRICKLE && chg_stat <= AXP2101_CHG_STATE_DONE);
 
         // VBAT : H5L8 from 0x34/0x35 (13-bit, 1 mV/LSB)
-        uint16_t vbat    = (uint16_t)(((uint16_t)(read_reg(0x34) & 0x1F) << 8) | read_reg(0x35));
+        uint16_t vbat    = (uint16_t)(((uint16_t)(read_reg(AXP2101_REG_VBAT_H) & AXP2101_MASK_ADC_H5) << 8) | read_reg(AXP2101_REG_VBAT_L));
         // VSYS : H6L8 from 0x36/0x37 (14-bit, 1 mV/LSB)
-        uint16_t vsys    = (uint16_t)(((uint16_t)(read_reg(0x36) & 0x3F) << 8) | read_reg(0x37));
+        uint16_t vsys    = (uint16_t)(((uint16_t)(read_reg(AXP2101_REG_VSYS_H) & AXP2101_MASK_ADC_H6) << 8) | read_reg(AXP2101_REG_VSYS_L));
         // VBUS : H6L8 from 0x38/0x39 (14-bit, 1 mV/LSB)
-        uint16_t vbus_mv = (uint16_t)(((uint16_t)(read_reg(0x38) & 0x3F) << 8) | read_reg(0x39));
+        uint16_t vbus_mv = (uint16_t)(((uint16_t)(read_reg(AXP2101_REG_VBUS_H) & AXP2101_MASK_ADC_H6) << 8) | read_reg(AXP2101_REG_VBUS_L));
         // Die Temp: formula from XPowersLib: 22.0 + (7274 - raw) / 20.0
-        uint16_t ts_raw  = (uint16_t)(((uint16_t)(read_reg(0x3C) & 0x3F) << 8) | read_reg(0x3D));
-        float temp_c     = 22.0f + (7274.0f - (float)ts_raw) / 20.0f;
-        bool temp_valid  = (temp_c >= -10.0f && temp_c <= 125.0f);
+        uint16_t ts_raw  = (uint16_t)(((uint16_t)(read_reg(AXP2101_REG_DIE_TEMP_H) & AXP2101_MASK_ADC_H6) << 8) | read_reg(AXP2101_REG_DIE_TEMP_L));
+        float temp_c     = AXP2101_DIE_TEMP_OFFSET_C + (AXP2101_DIE_TEMP_RAW_OFFSET - (float)ts_raw) / AXP2101_DIE_TEMP_RAW_PER_C;
+        bool temp_valid  = (temp_c >= AXP2101_DIE_TEMP_MIN_C && temp_c <= AXP2101_DIE_TEMP_MAX_C);
         // Battery percent from fuel gauge (reg 0xA4, 0–100)
-        uint8_t bat_pct  = read_reg(0xA4);
+        uint8_t bat_pct  = read_reg(AXP2101_REG_BAT_PERCENT);
 
         char msg[1200];
         int  n = 0;
